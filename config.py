@@ -33,7 +33,7 @@ TECH_ADMIN_ID = 1302410770
 PRODUCTS_SHEET = 'Товары'
 CATEGORIES_SHEET = 'Категории'
 ORDERS_SHEET = 'Заказы'
-REVIEWS_SHEET = 'Отзывы'  # ← ЭТО БЫЛО ДОБАВЛЕНО!
+REVIEWS_SHEET = 'Отзывы'
 
 # ============================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
