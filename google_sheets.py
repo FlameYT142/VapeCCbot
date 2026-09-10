@@ -2,6 +2,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from config import SHEET_ID, PRODUCTS_SHEET, CATEGORIES_SHEET, ORDERS_SHEET, REVIEWS_SHEET
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import logging
 import json
 import os
@@ -9,12 +10,10 @@ import os
 logger = logging.getLogger(__name__)
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+BRATSK_TZ = ZoneInfo("Asia/Irkutsk")
 
 
 def get_client():
-    """
-    Получить авторизованного клиента для Google Sheets.
-    """
     try:
         creds_json = os.getenv('GOOGLE_CREDENTIALS')
         
@@ -63,21 +62,14 @@ def get_reviews_sheet():
         return spreadsheet.add_worksheet(title=REVIEWS_SHEET, rows=100, cols=20)
 
 
-# ============================================
-# 📊 ПОЛУЧЕНИЕ КАТЕГОРИЙ (С ЛОГИРОВАНИЕМ)
-# ============================================
 def get_active_categories():
-    """Получить активные категории для отображения в меню"""
     try:
         sheet = get_categories_sheet()
         data = sheet.get_all_values()
         
         logger.info(f"📊 Лист 'Категории': {len(data)} строк")
-        for i, row in enumerate(data[:5]):
-            logger.info(f"📊 Строка {i+1}: {row}")
         
         if len(data) < 2:
-            logger.warning("⚠️ Лист 'Категории' пуст или содержит только заголовки")
             return []
         
         categories = []
@@ -102,9 +94,6 @@ def get_active_categories():
         return []
 
 
-# ============================================
-# 📦 ПОЛУЧЕНИЕ ТОВАРОВ
-# ============================================
 def get_all_products():
     """
     Получить все товары из таблицы
@@ -178,11 +167,7 @@ def get_product_by_id(product_id):
     return None
 
 
-# ============================================
-# 🔄 ОБНОВЛЕНИЕ КОЛИЧЕСТВА
-# ============================================
 def update_product_quantity(product_row, new_quantity):
-    """Обновить количество товара в таблице"""
     try:
         sheet = get_products_sheet()
         sheet.update_cell(product_row, 4, str(new_quantity))
@@ -194,7 +179,6 @@ def update_product_quantity(product_row, new_quantity):
 
 
 def decrease_product_quantity(product_row, amount=1):
-    """Уменьшить количество товара на amount"""
     try:
         sheet = get_products_sheet()
         current_quantity = sheet.cell(product_row, 4).value
@@ -213,11 +197,7 @@ def decrease_product_quantity(product_row, amount=1):
         return 0
 
 
-# ============================================
-# ➕ ДОБАВЛЕНИЕ ТОВАРА
-# ============================================
 def add_product_to_sheet(name, price, quantity):
-    """Добавить новый товар в таблицу"""
     try:
         sheet = get_products_sheet()
         data = sheet.get_all_values()
@@ -242,16 +222,20 @@ def add_product_to_sheet(name, price, quantity):
         return None
 
 
-# ============================================
-# 📋 ЗАКАЗЫ
-# ============================================
 def add_order(order_data):
     """Добавить заказ в таблицу"""
+    now = datetime.now(BRATSK_TZ)
+    
     sheet = get_orders_sheet()
+    data = sheet.get_all_values()
+    
+    order_number = len(data)
+    
     items_str = "\n".join([
         f"{item['name']} x{item['quantity']} = {item['price'] * item['quantity']:.2f} руб."
         for item in order_data['items']
     ])
+    
     row = [
         str(order_data['user_id']),
         order_data['username'] or 'Без юзернейма',
@@ -259,22 +243,25 @@ def add_order(order_data):
         f"{order_data['total']:.2f}",
         order_data['address'],
         order_data.get('status', 'Новый'),
-        datetime.now().strftime('%d.%m.%Y %H:%M')
+        now.strftime('%d.%m.%Y %H:%M')
     ]
     sheet.append_row(row)
-    logger.info(f"Заказ добавлен: {order_data['user_id']}")
-    return len(sheet.get_all_values()) - 1
+    logger.info(f"✅ Заказ #{order_number} добавлен: {order_data['user_id']}")
+    return order_number
 
 
 def update_order_status(order_row, status):
-    """Обновить статус заказа"""
-    sheet = get_orders_sheet()
-    sheet.update_cell(order_row, 6, status)
+    try:
+        sheet = get_orders_sheet()
+        row_in_sheet = order_row + 1
+        sheet.update_cell(row_in_sheet, 6, status)
+        logger.info(f"✅ Заказ #{order_row}: статус → {status}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления статуса: {e}")
+        return False
 
 
-# ============================================
-# 📊 ПОЛУЧЕНИЕ ЗАКАЗОВ (С ЛОГИРОВАНИЕМ)
-# ============================================
 def get_user_orders(user_id):
     """Получить все заказы пользователя"""
     try:
@@ -290,7 +277,7 @@ def get_user_orders(user_id):
         for i, row in enumerate(data[1:], start=2):
             if len(row) >= 1 and str(row[0]).strip() == str(user_id):
                 orders.append({
-                    'row': i,
+                    'row': i - 1,
                     'user_id': row[0].strip() if len(row) > 0 else '',
                     'username': row[1].strip() if len(row) > 1 else '',
                     'items': row[2].strip() if len(row) > 2 else '',
@@ -303,32 +290,32 @@ def get_user_orders(user_id):
         return orders
     except Exception as e:
         logger.error(f"❌ Ошибка получения заказов: {type(e).__name__}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
         return []
 
 
-# ============================================
-# ⭐ ОТЗЫВЫ
-# ============================================
 def save_review(user_id, username, order_id, product_rating, service_rating, comment):
-    """Сохранить отзыв в таблицу"""
-    sheet = get_reviews_sheet()
-    
-    headers = sheet.row_values(1)
-    if not headers:
-        headers = ['ID пользователя', 'Юзернейм', 'Номер заказа', 'Оценка товара', 'Оценка сервиса', 'Комментарий', 'Дата']
-        sheet.insert_row(headers, 1)
-    
-    row = [
-        str(user_id),
-        username or 'Без юзернейма',
-        str(order_id),
-        str(product_rating),
-        str(service_rating),
-        comment or '-',
-        datetime.now().strftime('%d.%m.%Y %H:%M')
-    ]
-    sheet.append_row(row)
-    logger.info(f"Отзыв сохранен от {username} (заказ #{order_id})")
-    return True
+    try:
+        sheet = get_reviews_sheet()
+        
+        headers = sheet.row_values(1)
+        if not headers:
+            headers = ['ID пользователя', 'Юзернейм', 'Номер заказа', 'Оценка товара', 'Оценка сервиса', 'Комментарий', 'Дата']
+            sheet.insert_row(headers, 1)
+        
+        now = datetime.now(BRATSK_TZ)
+        
+        row = [
+            str(user_id),
+            username or 'Без юзернейма',
+            str(order_id),
+            str(product_rating),
+            str(service_rating),
+            comment or '-',
+            now.strftime('%d.%m.%Y %H:%M')
+        ]
+        sheet.append_row(row)
+        logger.info(f"Отзыв сохранен от {username} (заказ #{order_id})")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения отзыва: {e}")
+        return False
