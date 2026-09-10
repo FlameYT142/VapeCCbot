@@ -42,6 +42,15 @@ PHOTOS = {
 }
 
 # ============================================
+# 📸 ФОТОГРАФИИ КАТЕГОРИЙ
+# ============================================
+CATEGORY_PHOTOS = {
+    'Вейп': 'https://i.ibb.co/Jjkzb11W/image.jpg',
+    'Одежда': 'https://i.ibb.co/SwB21cDP/image.jpg',
+    'Техника': 'https://i.ibb.co/BYT9v1n/image.jpg',
+}
+
+# ============================================
 # 🕐 ВРЕМЯ БРАТСКА И ДОСТАВКА
 # ============================================
 BRATSK_TZ = ZoneInfo("Asia/Irkutsk")
@@ -106,7 +115,7 @@ PAYMENT_DETAILS = """
 # ХРАНИЛИЩЕ
 # ============================================
 admin_sessions = {}
-pending_orders = {}  # Заказы, ожидающие авторизации
+pending_orders = {}
 
 
 async def safe_edit(query, text, reply_markup=None, parse_mode='Markdown'):
@@ -124,7 +133,6 @@ async def safe_edit(query, text, reply_markup=None, parse_mode='Markdown'):
 # ГЛАВНОЕ МЕНЮ
 # ============================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ИГНОРИРУЕМ ГРУППЫ
     if update.effective_chat.type in ['group', 'supergroup']:
         return
     
@@ -188,7 +196,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ВХОД ДЛЯ АДМИНОВ
 # ============================================
 async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ИГНОРИРУЕМ ГРУППЫ
     if update.effective_chat.type in ['group', 'supergroup']:
         return
     
@@ -815,7 +822,6 @@ async def process_card_order(update, context, query, user_id):
 
 
 async def notify_admins(context, order, payment_type, order_row, order_id=None):
-    """Отправить уведомление о новом заказе в ГРУППУ админов"""
     items_text = "\n".join([f"• {item['name']} x{item['quantity']} = {item['price'] * item['quantity']:.2f} руб." for item in order['items']])
     
     delivery_price = order.get('delivery_price', 0)
@@ -860,10 +866,8 @@ async def notify_admins(context, order, payment_type, order_row, order_id=None):
 # ПОДТВЕРЖДЕНИЕ ОПЛАТЫ
 # ============================================
 async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
-    """Подтверждение оплаты админом"""
     admin_id = update.effective_user.id
     
-    # ПРОВЕРКА АВТОРИЗАЦИИ
     if admin_id not in admin_sessions or not admin_sessions[admin_id]:
         try:
             await context.bot.send_message(
@@ -889,7 +893,6 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
         await query.answer("⛔ У вас нет прав", show_alert=True)
         return
     
-    # СПИСЫВАЕМ ТОВАРЫ
     try:
         sheet = get_orders_sheet()
         order_data = sheet.row_values(int(order_row) + 1)
@@ -1357,7 +1360,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status = "❌ Нет"
             keyboard.append([InlineKeyboardButton(f"{p['name']} - {p['price']:.2f} руб. {status}", callback_data=f'product_{p["id"]}')])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='catalog')])
-        await safe_edit(query, f"📦 *{category}*\n\nВыберите товар:", InlineKeyboardMarkup(keyboard))
+        
+        text = f"📦 *{category}*\n\nВыберите товар:"
+        
+        # Проверяем, есть ли фото для категории
+        category_photo = CATEGORY_PHOTOS.get(category)
+        
+        if category_photo and query.message.photo:
+            try:
+                await query.edit_message_caption(
+                    caption=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Ошибка edit_message_caption: {e}")
+                await query.message.reply_photo(
+                    photo=category_photo,
+                    caption=text,
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                await query.message.delete()
+        elif category_photo and not query.message.photo:
+            await query.message.reply_photo(
+                photo=category_photo,
+                caption=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            await query.message.delete()
+        else:
+            await safe_edit(query, text, InlineKeyboardMarkup(keyboard))
     
     elif data.startswith('product_'):
         product_id = data[8:]
