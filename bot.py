@@ -1,6 +1,7 @@
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -13,8 +14,8 @@ from google_sheets import (
     get_all_products, get_product_by_id, get_active_categories,
     get_products_by_category, add_order,
     update_order_status, save_review,
-    decrease_product_quantity,
-    add_product_to_sheet
+    decrease_product_quantity, add_product_to_sheet,
+    get_user_orders, get_orders_sheet
 )
 from cart import (
     get_cart, add_to_cart, remove_from_cart, clear_cart,
@@ -31,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================
-# 📸 ВСЕ ФОТОГРАФИИ БОТА
+# 📸 ФОТОГРАФИИ
 # ============================================
 PHOTOS = {
     'start': 'https://i.ibb.co/fz9MMDdc/image.jpg',
@@ -48,7 +49,57 @@ CATEGORY_PHOTOS = {
 }
 
 # ============================================
-# РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ ПО КАРТЕ
+# 🕐 ВРЕМЯ БРАТСКА И ДОСТАВКА
+# ============================================
+BRATSK_TZ = ZoneInfo("Asia/Irkutsk")
+NIGHT_START = dt_time(21, 0)
+NIGHT_END = dt_time(9, 0)
+DELIVERY_PRICE = 200
+
+
+def get_bratsk_time():
+    """Получить текущее время в Братске"""
+    return datetime.now(BRATSK_TZ)
+
+
+def is_night_delivery():
+    """Проверить, является ли доставка ночной"""
+    now = get_bratsk_time()
+    current_time = now.time()
+    if current_time >= NIGHT_START or current_time < NIGHT_END:
+        return True
+    return False
+
+
+def get_delivery_info():
+    """Получить информацию о доставке"""
+    now = get_bratsk_time()
+    is_night = is_night_delivery()
+    
+    if is_night:
+        return {
+            'is_night': True,
+            'price': DELIVERY_PRICE,
+            'time': now.strftime('%H:%M'),
+            'message': f"🌙 *Ночная доставка*\n\n"
+                       f"🕐 Время в Братске: *{now.strftime('%H:%M')}*\n"
+                       f"💰 Стоимость доставки: *{DELIVERY_PRICE}* руб.\n\n"
+                       f"Доставка с 21:00 до 09:00 — платная."
+        }
+    else:
+        return {
+            'is_night': False,
+            'price': 0,
+            'time': now.strftime('%H:%M'),
+            'message': f"☀️ *Дневная доставка*\n\n"
+                       f"🕐 Время в Братске: *{now.strftime('%H:%M')}*\n"
+                       f"💰 Доставка: *Бесплатно*\n\n"
+                       f"Доставка с 09:00 до 21:00 — бесплатная."
+        }
+
+
+# ============================================
+# РЕКВИЗИТЫ
 # ============================================
 PAYMENT_DETAILS = """
 💳 *Оплата по карте*
@@ -71,11 +122,11 @@ PAYMENT_DETAILS = """
 # ============================================
 admin_sessions = {}
 
+
 # ============================================
 # ГЛАВНОЕ МЕНЮ
 # ============================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главное меню"""
     user_id = update.effective_user.id
     username = update.effective_user.username
     
@@ -115,11 +166,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+
 # ============================================
 # ВХОД ДЛЯ АДМИНОВ
 # ============================================
 async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Скрытая команда для входа в админ-панель"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -134,8 +185,7 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔑 *Вход в админ-панель*\n\n"
             f"👤 Ваша роль: *{role_name}*\n"
             f"🆔 Ваш ID: `{user_id}`\n\n"
-            f"Использование: `/admin [код_доступа]`\n\n"
-            f"Если вы забыли код, обратитесь к владельцу бота.",
+            f"Использование: `/admin [код_доступа]`",
             parse_mode='Markdown'
         )
         return
@@ -172,21 +222,15 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Не удалось уведомить владельца: {e}")
     else:
-        await update.message.reply_text(
-            "❌ *Неверный код доступа!*",
-            parse_mode='Markdown'
-        )
-        admin_info = get_admin_info(user_id)
-        admin_username = admin_info.get('username', str(user_id))
-        logger.warning(f"⚠️ Неудачная попытка входа от {admin_username} ({user_id})")
+        await update.message.reply_text("❌ *Неверный код доступа!*", parse_mode='Markdown')
+
 
 async def admin_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выход из админ-панели"""
     user_id = update.effective_user.id
     if user_id in admin_sessions:
         del admin_sessions[user_id]
         await update.message.reply_text("👋 *Выход выполнен*", parse_mode='Markdown')
-        logger.info(f"🔒 Администратор вышел из системы ({user_id})")
+
 
 # ============================================
 # КАТАЛОГ
@@ -215,6 +259,7 @@ async def catalog_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
+
 
 # ============================================
 # КОРЗИНА
@@ -248,6 +293,7 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+
 # ============================================
 # HELP
 # ============================================
@@ -274,6 +320,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text += f"\n📝 *Вход:* `/admin [пароль]`"
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
+
 # ============================================
 # О МАГАЗИНЕ
 # ============================================
@@ -289,16 +336,50 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode='Markdown')
 
+
 # ============================================
 # МОИ ЗАКАЗЫ
 # ============================================
 async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "📋 *История ваших заказов*\n\n"
-        "📦 У вас пока нет заказов.\n\n"
-        "🛍️ Перейдите в каталог, чтобы сделать первый заказ!"
-    )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    """История заказов пользователя"""
+    user_id = update.effective_user.id
+    orders = get_user_orders(user_id)
+    
+    if not orders:
+        await update.message.reply_text(
+            "📋 *История ваших заказов*\n\n"
+            "📦 У вас пока нет заказов.\n\n"
+            "🛍️ Перейдите в каталог, чтобы сделать первый заказ!",
+            parse_mode='Markdown'
+        )
+        return
+    
+    status_emoji = {
+        'Новый': '🆕',
+        'Ожидает оплаты (наличные)': '💵',
+        'Ожидает оплаты (карта)': '💳',
+        'Сборка товара': '📦',
+        'В пути': '🚚',
+        'Доставлен': '📬',
+        'Подтвержден получение': '✅'
+    }
+    
+    text = "📋 *Ваши заказы:*\n\n"
+    
+    for order in orders[-5:]:
+        emoji = status_emoji.get(order['status'], '📦')
+        text += (
+            f"{emoji} *Заказ от {order['date']}*\n"
+            f"💰 Сумма: *{order['total']}* руб.\n"
+            f"📊 Статус: *{order['status']}*\n"
+            f"📍 Адрес: {order['address'][:30]}...\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+        )
+    
+    keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')]]
+    
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 # ============================================
 # ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
@@ -315,10 +396,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['new_product_name'] = text
             context.user_data['adding_step'] = 'price'
             await update.message.reply_text(
-                f"✅ Название: *{text}*\n\n"
-                f"💰 Введите *цену* товара (в рублях):\n"
-                f"Пример: `1200.50`\n\n"
-                f"Для отмены: /cancel",
+                f"✅ Название: *{text}*\n\n💰 Введите *цену* товара:\nПример: `1200.50`\n\nДля отмены: /cancel",
                 parse_mode='Markdown'
             )
             return
@@ -329,18 +407,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data['new_product_price'] = price
                 context.user_data['adding_step'] = 'quantity'
                 await update.message.reply_text(
-                    f"✅ Цена: *{price:.2f}* руб.\n\n"
-                    f"📦 Введите *количество* товара:\n"
-                    f"Пример: `10`\n\n"
-                    f"Для отмены: /cancel",
+                    f"✅ Цена: *{price:.2f}* руб.\n\n📦 Введите *количество*:\nПример: `10`\n\nДля отмены: /cancel",
                     parse_mode='Markdown'
                 )
             except ValueError:
-                await update.message.reply_text(
-                    "❌ Неверный формат цены.\n"
-                    "Введите число, например: `1200.50`",
-                    parse_mode='Markdown'
-                )
+                await update.message.reply_text("❌ Неверный формат цены. Введите число.", parse_mode='Markdown')
             return
         
         elif step == 'quantity':
@@ -358,23 +429,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data.pop('new_product_price', None)
                     
                     await update.message.reply_text(
-                        f"✅ *Товар добавлен!*\n\n"
-                        f"📦 Название: *{name}*\n"
-                        f"💰 Цена: *{price:.2f}* руб.\n"
-                        f"🔢 Количество: *{quantity}* шт.\n"
-                        f"💵 Сумма: *{price * quantity:.2f}* руб.\n\n"
-                        f"Товар появился в каталоге! 🎉",
+                        f"✅ *Товар добавлен!*\n\n📦 Название: *{name}*\n💰 Цена: *{price:.2f}* руб.\n🔢 Количество: *{quantity}* шт.\n💵 Сумма: *{price * quantity:.2f}* руб.",
                         parse_mode='Markdown'
                     )
-                    logger.info(f"✅ Админ {user_id} добавил товар: {name}")
                 else:
                     await update.message.reply_text("❌ Ошибка добавления товара.")
             except ValueError:
-                await update.message.reply_text(
-                    "❌ Неверный формат количества.\n"
-                    "Введите целое число, например: `10`",
-                    parse_mode='Markdown'
-                )
+                await update.message.reply_text("❌ Неверный формат количества. Введите целое число.", parse_mode='Markdown')
             return
     
     # ===== КНОПКИ МЕНЮ =====
@@ -394,7 +455,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in admin_sessions and admin_sessions[user_id]:
             keyboard = [
                 [InlineKeyboardButton("📦 Управление товарами", callback_data='admin_products')],
-                [InlineKeyboardButton("📊 Просмотр заказов", callback_data='admin_orders')],
+                [InlineKeyboardButton("📊 Управление заказами", callback_data='admin_manage_orders')],
                 [InlineKeyboardButton("📈 Статистика", callback_data='admin_stats')],
                 [InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')],
             ]
@@ -405,10 +466,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
         else:
-            await update.message.reply_text(
-                "🔑 *Доступ запрещен*\n\nДля входа используйте:\n`/admin [пароль]`",
-                parse_mode='Markdown'
-            )
+            await update.message.reply_text("🔑 *Доступ запрещен*\n\nДля входа используйте:\n`/admin [пароль]`", parse_mode='Markdown')
         return
     
     # ===== ОТМЕНА =====
@@ -433,7 +491,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         save_order_data(user_id, text, None)
         context.user_data['awaiting_address'] = False
-        total = get_cart_total(user_id)
+        
+        cart_total = get_cart_total(user_id)
+        delivery_price = context.user_data.get('delivery_price', 0)
+        is_night = context.user_data.get('is_night', False)
+        final_total = cart_total + delivery_price
+        
+        if is_night:
+            delivery_text = f"🌙 Доставка (ночная): *{delivery_price:.2f}* руб."
+        else:
+            delivery_text = f"☀️ Доставка (дневная): *Бесплатно*"
         
         keyboard = [
             [InlineKeyboardButton("💵 Наличные (при получении)", callback_data='payment_cash')],
@@ -442,7 +509,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_photo(
             photo=PHOTOS['payment'],
-            caption=f"📍 Адрес: {text}\n💰 Сумма: *{total:.2f}* руб.\n\n*Выберите способ оплаты:*",
+            caption=(
+                f"📍 Адрес: {text}\n\n"
+                f"💰 Товары: *{cart_total:.2f}* руб.\n"
+                f"{delivery_text}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💵 *Итого: {final_total:.2f} руб.*\n\n"
+                f"*Выберите способ оплаты:*"
+            ),
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -466,12 +540,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['awaiting_review'] = False
             context.user_data['review_data'] = {}
             await update.message.reply_text(
-                "⭐ *Спасибо за ваш отзыв!*\n\n"
-                "Ваше мнение очень важно для нас.\n"
-                "Возвращайтесь в VapeCity - 24/7! 🚀",
+                "⭐ *Спасибо за ваш отзыв!*\n\nВаше мнение очень важно для нас.\nВозвращайтесь в VapeCity - 24/7! 🚀",
                 parse_mode='Markdown'
             )
         return
+
 
 # ============================================
 # ОФОРМЛЕНИЕ ЗАКАЗА
@@ -490,13 +563,31 @@ async def process_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE, q
             out_of_stock.append(item['name'])
     
     if out_of_stock:
-        await query.edit_message_text(
-            f"❌ Нет в наличии:\n" + "\n".join(out_of_stock) + "\n\nУдалите их из корзины."
-        )
+        await query.edit_message_text(f"❌ Нет в наличии:\n" + "\n".join(out_of_stock) + "\n\nУдалите их из корзины.")
         return
     
+    delivery_info = get_delivery_info()
+    context.user_data['delivery_price'] = delivery_info['price']
+    context.user_data['is_night'] = delivery_info['is_night']
+    
+    cart_total = get_cart_total(user_id)
+    delivery_price = delivery_info['price']
+    final_total = cart_total + delivery_price
+    
+    text = (
+        f"📦 *Оформление заказа*\n\n"
+        f"💰 Сумма товаров: *{cart_total:.2f}* руб.\n"
+        f"{delivery_info['message']}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 *Итого к оплате: {final_total:.2f} руб.*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📍 Введите адрес доставки.\n"
+        f"Для отмены: /cancel"
+    )
+    
     context.user_data['awaiting_address'] = True
-    await query.edit_message_text("📍 Введите адрес доставки.\nДля отмены: /cancel")
+    await query.edit_message_text(text, parse_mode='Markdown')
+
 
 async def process_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, query, payment_method):
     user_id = update.effective_user.id
@@ -507,17 +598,20 @@ async def process_payment_selection(update: Update, context: ContextTypes.DEFAUL
     
     save_order_data(user_id, order_data['address'], payment_method)
     if payment_method == 'cash':
-        await process_cash_order(update, query, user_id)
+        await process_cash_order(update, context, query, user_id)
     elif payment_method == 'card':
-        await process_card_order(update, query, user_id)
+        await process_card_order(update, context, query, user_id)
 
-async def process_cash_order(update, query, user_id):
+
+async def process_cash_order(update, context, query, user_id):
     cart_items = get_cart(user_id)
-    total = get_cart_total(user_id)
+    cart_total = get_cart_total(user_id)
     order_data = get_order_data(user_id)
     username = update.effective_user.username
     
-    # СПИСЫВАЕМ ТОВАРЫ
+    delivery_price = context.user_data.get('delivery_price', 0)
+    total = cart_total + delivery_price
+    
     for item in cart_items:
         if item.get('row'):
             decrease_product_quantity(item['row'], item['quantity'])
@@ -528,19 +622,27 @@ async def process_cash_order(update, query, user_id):
         'username': f"@{username}" if username else str(user_id),
         'items': cart_items.copy(),
         'total': total,
+        'delivery_price': delivery_price,
         'address': order_data.get('address', ''),
-        'status': 'Ожидает оплаты (наличные)'
+        'status': 'Новый'
     }
     
     order_row = add_order(order)
     clear_cart(user_id)
     clear_order_data(user_id)
     context.user_data['awaiting_address'] = False
+    context.user_data['delivery_price'] = 0
+    
+    delivery_text = ""
+    if delivery_price > 0:
+        delivery_text = f"🚚 Доставка: *{delivery_price:.2f}* руб.\n"
     
     await query.edit_message_text(
         f"✅ *Заказ оформлен!*\n\n"
         f"📍 Адрес: {order['address']}\n"
-        f"💰 Сумма: *{total:.2f}* руб.\n"
+        f"💰 Товары: *{cart_total:.2f}* руб.\n"
+        f"{delivery_text}"
+        f"💵 Итого: *{total:.2f}* руб.\n"
         f"💳 Оплата: *Наличные (при получении)*\n\n"
         f"📦 Ожидайте доставку.\n"
         f"Спасибо за покупку! 🎉",
@@ -548,15 +650,19 @@ async def process_cash_order(update, query, user_id):
     )
     await notify_admins(context, order, 'наличные', order_row)
 
-async def process_card_order(update, query, user_id):
+
+async def process_card_order(update, context, query, user_id):
     cart_items = get_cart(user_id)
-    total = get_cart_total(user_id)
+    cart_total = get_cart_total(user_id)
     order_data = get_order_data(user_id)
     username = update.effective_user.username
+    
+    delivery_price = context.user_data.get('delivery_price', 0)
+    total = cart_total + delivery_price
+    
     order_id = f"{user_id % 10000}{int(time.time()) % 10000}"
     payment_text = PAYMENT_DETAILS.format(total=total, order_id=order_id)
     
-    # СПИСЫВАЕМ ТОВАРЫ
     for item in cart_items:
         if item.get('row'):
             decrease_product_quantity(item['row'], item['quantity'])
@@ -567,21 +673,29 @@ async def process_card_order(update, query, user_id):
         'username': f"@{username}" if username else str(user_id),
         'items': cart_items.copy(),
         'total': total,
+        'delivery_price': delivery_price,
         'address': order_data.get('address', ''),
-        'status': 'Ожидает оплаты (карта)'
+        'status': 'Новый'
     }
     
     order_row = add_order(order)
     clear_cart(user_id)
     clear_order_data(user_id)
     context.user_data['awaiting_address'] = False
+    context.user_data['delivery_price'] = 0
+    
+    delivery_text = ""
+    if delivery_price > 0:
+        delivery_text = f"🚚 Доставка: *{delivery_price:.2f}* руб.\n"
     
     await query.message.reply_photo(
         photo=PHOTOS['payment'],
         caption=(
             f"✅ *Заказ оформлен!*\n\n"
             f"📍 Адрес: {order['address']}\n"
-            f"💰 Сумма: *{total:.2f}* руб.\n"
+            f"💰 Товары: *{cart_total:.2f}* руб.\n"
+            f"{delivery_text}"
+            f"💵 Итого: *{total:.2f}* руб.\n"
             f"💳 Оплата: *Перевод по карте*\n"
             f"🆔 Заказ: #{order_id}\n\n"
             f"{payment_text}\n\n"
@@ -593,13 +707,22 @@ async def process_card_order(update, query, user_id):
     await query.message.delete()
     await notify_admins(context, order, 'карта', order_row, order_id)
 
+
 async def notify_admins(context, order, payment_type, order_row, order_id=None):
     items_text = "\n".join([f"• {item['name']} x{item['quantity']} = {item['price'] * item['quantity']:.2f} руб." for item in order['items']])
+    
+    delivery_price = order.get('delivery_price', 0)
+    delivery_info = ""
+    if delivery_price > 0:
+        delivery_info = f"🚚 Доставка: {delivery_price:.2f} руб.\n"
+    
     order_info = (
         f"🆕 *Новый заказ!*\n\n"
         f"👤 {order['username']}\n"
         f"📍 {order['address']}\n"
-        f"💰 {order['total']:.2f} руб.\n"
+        f"💰 Товары: {order['total'] - delivery_price:.2f} руб.\n"
+        f"{delivery_info}"
+        f"💵 Итого: {order['total']:.2f} руб.\n"
         f"💳 {payment_type}\n"
         f"📦 Строка: #{order_row}"
     )
@@ -613,13 +736,10 @@ async def notify_admins(context, order, payment_type, order_row, order_id=None):
             keyboard = [
                 [InlineKeyboardButton("📦 Отметить доставленным", callback_data=f'deliver_{order["user_id"]}_{order_row}')],
             ]
-            await context.bot.send_message(
-                admin_id,
-                "Действия с заказом:",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            await context.bot.send_message(admin_id, "Действия с заказом:", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
             logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+
 
 # ============================================
 # ПОДТВЕРЖДЕНИЕ ДОСТАВКИ
@@ -633,9 +753,7 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
     update_order_status(int(order_row), 'Доставлен')
     
     try:
-        keyboard = [
-            [InlineKeyboardButton("✅ Подтвердить получение", callback_data=f'confirm_{user_id}_{order_row}')]
-        ]
+        keyboard = [[InlineKeyboardButton("✅ Подтвердить получение", callback_data=f'confirm_{user_id}_{order_row}')]]
         await context.bot.send_message(
             user_id,
             f"📦 *Ваш заказ доставлен!*\n\nПожалуйста, подтвердите получение товара.",
@@ -645,6 +763,7 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
         await query.edit_message_text("✅ Пользователь уведомлен о доставке.")
     except Exception as e:
         await query.edit_message_text(f"❌ Ошибка: {e}")
+
 
 async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     current_user = update.effective_user.id
@@ -668,6 +787,7 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
     context.user_data['review_data'] = {'user_id': user_id, 'order_id': order_row}
     context.user_data['awaiting_review'] = True
 
+
 async def rate_product(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     keyboard = [
         [InlineKeyboardButton("⭐ 1", callback_data=f'product_rate_1_{user_id}_{order_row}')],
@@ -676,11 +796,8 @@ async def rate_product(update: Update, context: ContextTypes.DEFAULT_TYPE, query
         [InlineKeyboardButton("⭐ 4", callback_data=f'product_rate_4_{user_id}_{order_row}')],
         [InlineKeyboardButton("⭐ 5", callback_data=f'product_rate_5_{user_id}_{order_row}')],
     ]
-    await query.edit_message_text(
-        "⭐ *Оцените качество товара:*\n\n1 - Очень плохо\n5 - Отлично",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("⭐ *Оцените качество товара:*\n\n1 - Очень плохо\n5 - Отлично", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 async def rate_service(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     keyboard = [
@@ -690,11 +807,8 @@ async def rate_service(update: Update, context: ContextTypes.DEFAULT_TYPE, query
         [InlineKeyboardButton("⭐ 4", callback_data=f'service_rate_4_{user_id}_{order_row}')],
         [InlineKeyboardButton("⭐ 5", callback_data=f'service_rate_5_{user_id}_{order_row}')],
     ]
-    await query.edit_message_text(
-        "⭐ *Оцените качество сервиса:*\n\n1 - Очень плохо\n5 - Отлично",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("⭐ *Оцените качество сервиса:*\n\n1 - Очень плохо\n5 - Отлично", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, query, rating_type, value, user_id, order_row):
     review_data = context.user_data.get('review_data', {})
@@ -712,11 +826,8 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, que
             [InlineKeyboardButton("✏️ Написать комментарий", callback_data=f'comment_{user_id}_{order_row}')],
             [InlineKeyboardButton("⏭️ Пропустить", callback_data=f'skip_review_{user_id}_{order_row}')],
         ]
-        await query.edit_message_text(
-            "✏️ *Хотите оставить комментарий?*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("✏️ *Хотите оставить комментарий?*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 async def skip_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     review_data = context.user_data.get('review_data', {})
@@ -730,18 +841,16 @@ async def skip_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query,
     )
     context.user_data['awaiting_review'] = False
     context.user_data['review_data'] = {}
-    await query.edit_message_text(
-        "⭐ *Спасибо!*\n\nВаше мнение очень важно для нас.\nВозвращайтесь в VapeCity - 24/7! 🚀",
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("⭐ *Спасибо!*\n\nВаше мнение очень важно для нас.\nВозвращайтесь в VapeCity - 24/7! 🚀", parse_mode='Markdown')
+
 
 async def comment_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     await query.edit_message_text(
-        "✏️ *Напишите ваш комментарий:*\n\n"
-        "Поделитесь впечатлениями о товаре и сервисе.",
+        "✏️ *Напишите ваш комментарий:*\n\nПоделитесь впечатлениями о товаре и сервисе.",
         parse_mode='Markdown'
     )
     context.user_data['awaiting_review'] = True
+
 
 # ============================================
 # АДМИН-ПАНЕЛЬ
@@ -749,7 +858,7 @@ async def comment_review(update: Update, context: ContextTypes.DEFAULT_TYPE, que
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, query):
     user_id = update.effective_user.id
     if user_id not in admin_sessions or not admin_sessions[user_id]:
-        await query.edit_message_text("🔑 *Доступ запрещен*\n\nДля доступа используйте `/admin [код]`", parse_mode='Markdown')
+        await query.edit_message_text("🔑 *Доступ запрещен*", parse_mode='Markdown')
         return
     
     role = get_admin_role(user_id)
@@ -757,7 +866,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, q
     
     keyboard = [
         [InlineKeyboardButton("📦 Управление товарами", callback_data='admin_products')],
-        [InlineKeyboardButton("📊 Просмотр заказов", callback_data='admin_orders')],
+        [InlineKeyboardButton("📊 Управление заказами", callback_data='admin_manage_orders')],
         [InlineKeyboardButton("📈 Статистика", callback_data='admin_stats')],
     ]
     
@@ -767,11 +876,13 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, q
     
     keyboard.append([InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')])
     
-    await query.edit_message_text(
-        f"⚙️ *Админ-панель*\n\n👤 *{role_name}*\n🆔 `{user_id}`\n🔐 Сессия активна\n\nВыберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    text = f"⚙️ *Админ-панель*\n\n👤 *{role_name}*\n🆔 `{user_id}`\n🔐 Сессия активна\n\nВыберите действие:"
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 async def admin_products(update: Update, context: ContextTypes.DEFAULT_TYPE, query):
     user_id = update.effective_user.id
@@ -784,19 +895,36 @@ async def admin_products(update: Update, context: ContextTypes.DEFAULT_TYPE, que
         [InlineKeyboardButton("📋 Список товаров", callback_data='admin_list_products')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
     ]
-    await query.edit_message_text("📦 *Управление товарами*\n\nВыберите действие:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
+    text = "📦 *Управление товарами*\n\nВыберите действие:"
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE, query):
+
+async def admin_manage_orders(update: Update, context: ContextTypes.DEFAULT_TYPE, query):
     user_id = update.effective_user.id
     if user_id not in admin_sessions or not admin_sessions[user_id]:
         await query.edit_message_text("🔑 Пожалуйста, авторизуйтесь.")
         return
     
     keyboard = [
-        [InlineKeyboardButton("📋 Все заказы", callback_data='admin_list_orders')],
+        [InlineKeyboardButton("🆕 Новые заказы", callback_data='admin_orders_new')],
+        [InlineKeyboardButton("📦 В сборке", callback_data='admin_orders_assembly')],
+        [InlineKeyboardButton("🚚 В пути", callback_data='admin_orders_delivery')],
+        [InlineKeyboardButton("📬 Доставленные", callback_data='admin_orders_delivered')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
     ]
-    await query.edit_message_text("📊 *Управление заказами*\n\nВыберите статус:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
+    text = "📊 *Управление заказами*\n\nВыберите статус:"
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, query):
     user_id = update.effective_user.id
@@ -813,7 +941,118 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, query)
 📊 Средний чек: 0.00 руб.
 """
     keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='admin_stats')], [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')]]
-    await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+
+async def show_orders_by_status(update: Update, context: ContextTypes.DEFAULT_TYPE, query, status):
+    """Показать заказы с определённым статусом"""
+    try:
+        sheet = get_orders_sheet()
+        data = sheet.get_all_values()
+        
+        orders = []
+        for i, row in enumerate(data[1:], start=2):
+            if len(row) > 5 and row[5].strip() == status:
+                orders.append({
+                    'row': i,
+                    'user_id': row[0].strip(),
+                    'username': row[1].strip(),
+                    'total': row[3].strip(),
+                    'address': row[4].strip(),
+                })
+        
+        if not orders:
+            text = f"📭 Нет заказов со статусом *{status}*"
+            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')]]
+            if query.message.photo:
+                await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+            else:
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+            return
+        
+        text = f"📋 *Заказы со статусом: {status}*\n\n"
+        keyboard = []
+        
+        for order in orders[:10]:
+            text += (
+                f"🆔 Заказ #{order['row']}\n"
+                f"👤 {order['username']}\n"
+                f"💰 {order['total']} руб.\n"
+                f"📍 {order['address'][:30]}...\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+            )
+            keyboard.append([InlineKeyboardButton(
+                f"Изменить статус #{order['row']}", 
+                callback_data=f'change_status_{order["row"]}'
+            )])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')])
+        
+        if query.message.photo:
+            await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await query.edit_message_text("❌ Ошибка получения заказов.")
+
+
+async def change_order_status(update: Update, context: ContextTypes.DEFAULT_TYPE, query, order_row):
+    """Показать кнопки для изменения статуса"""
+    keyboard = [
+        [InlineKeyboardButton("🆕 Новый", callback_data=f'set_status_{order_row}_Новый')],
+        [InlineKeyboardButton("📦 Сборка товара", callback_data=f'set_status_{order_row}_Сборка товара')],
+        [InlineKeyboardButton("🚚 В пути", callback_data=f'set_status_{order_row}_В пути')],
+        [InlineKeyboardButton("📬 Доставлен", callback_data=f'set_status_{order_row}_Доставлен')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')],
+    ]
+    
+    text = f"📊 *Изменение статуса заказа #{order_row}*\n\nВыберите новый статус:"
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+
+async def set_order_status(update: Update, context: ContextTypes.DEFAULT_TYPE, query, order_row, new_status):
+    """Установить новый статус заказа"""
+    try:
+        update_order_status(int(order_row), new_status)
+        
+        sheet = get_orders_sheet()
+        user_id = sheet.cell(int(order_row), 1).value
+        
+        if user_id:
+            status_emoji = {'Новый': '🆕', 'Сборка товара': '📦', 'В пути': '🚚', 'Доставлен': '📬'}
+            emoji = status_emoji.get(new_status, '📦')
+            
+            try:
+                await context.bot.send_message(
+                    int(user_id),
+                    f"{emoji} *Статус вашего заказа обновлён!*\n\n📊 Новый статус: *{new_status}*\n\nСледите за обновлениями в разделе 'Мои заказы'.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя: {e}")
+        
+        await query.edit_message_text(
+            f"✅ Статус заказа #{order_row} изменён на *{new_status}*",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К заказам", callback_data='admin_manage_orders')]])
+        )
+        
+        logger.info(f"📊 Заказ #{order_row}: статус → {new_status}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await query.edit_message_text("❌ Ошибка изменения статуса.")
+
 
 # ============================================
 # ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК
@@ -937,6 +1176,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_method = data[8:]
         await process_payment_selection(update, context, query, payment_method)
     
+    # ===== МОИ ЗАКАЗЫ =====
+    elif data == 'refresh_orders':
+        orders = get_user_orders(user_id)
+        if not orders:
+            await query.edit_message_text("📦 У вас пока нет заказов.")
+            return
+        
+        status_emoji = {
+            'Новый': '🆕',
+            'Ожидает оплаты (наличные)': '💵',
+            'Ожидает оплаты (карта)': '💳',
+            'Сборка товара': '📦',
+            'В пути': '🚚',
+            'Доставлен': '📬',
+            'Подтвержден получение': '✅'
+        }
+        
+        text = "📋 *Ваши заказы:*\n\n"
+        for order in orders[-5:]:
+            emoji = status_emoji.get(order['status'], '📦')
+            text += (
+                f"{emoji} *Заказ от {order['date']}*\n"
+                f"💰 Сумма: *{order['total']}* руб.\n"
+                f"📊 Статус: *{order['status']}*\n"
+                f"📍 Адрес: {order['address'][:30]}...\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+            )
+        
+        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    
     # ===== АДМИН-ПАНЕЛЬ =====
     elif data == 'admin_panel':
         await show_admin_panel(update, context, query)
@@ -944,8 +1214,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'admin_products':
         await admin_products(update, context, query)
     
-    elif data == 'admin_orders':
-        await admin_orders(update, context, query)
+    elif data == 'admin_manage_orders':
+        await admin_manage_orders(update, context, query)
     
     elif data == 'admin_stats':
         await admin_stats(update, context, query)
@@ -965,6 +1235,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id in admin_sessions:
             del admin_sessions[user_id]
             await query.edit_message_text("👋 *Выход выполнен*", parse_mode='Markdown')
+    
+    # ===== УПРАВЛЕНИЕ СТАТУСАМИ =====
+    elif data == 'admin_orders_new':
+        await show_orders_by_status(update, context, query, 'Новый')
+    
+    elif data == 'admin_orders_assembly':
+        await show_orders_by_status(update, context, query, 'Сборка товара')
+    
+    elif data == 'admin_orders_delivery':
+        await show_orders_by_status(update, context, query, 'В пути')
+    
+    elif data == 'admin_orders_delivered':
+        await show_orders_by_status(update, context, query, 'Доставлен')
+    
+    elif data.startswith('change_status_'):
+        order_row = data[14:]
+        await change_order_status(update, context, query, order_row)
+    
+    elif data.startswith('set_status_'):
+        parts = data.split('_')
+        if len(parts) >= 4:
+            order_row = parts[2]
+            new_status = '_'.join(parts[3:])
+            await set_order_status(update, context, query, order_row, new_status)
     
     # ===== ДОСТАВКА И ОТЗЫВЫ =====
     elif data.startswith('deliver_'):
@@ -1007,6 +1301,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) >= 4:
             await comment_review(update, context, query, parts[1], parts[2])
 
+
 # ============================================
 # ЗАПУСК БОТА
 # ============================================
@@ -1029,6 +1324,7 @@ def main():
     logger.info(f"👥 Всего администраторов: {len(ADMIN_ACCESS)}")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == '__main__':
     main()
