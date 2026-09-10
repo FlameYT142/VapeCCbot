@@ -30,7 +30,7 @@ TECH_ADMIN_ID = 1302410770
 # ============================================
 # НАЗВАНИЯ ЛИСТОВ В GOOGLE TABLES
 # ============================================
-PRODUCTS_SHEET = 'Товары'
+PRODUCTS_SHEET = 'Табель цеников'
 CATEGORIES_SHEET = 'Категории'
 ORDERS_SHEET = 'Заказы'
 REVIEWS_SHEET = 'Отзывы'
