@@ -236,7 +236,6 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.info(f"🔐 Администратор {admin_username} ({user_id}) вошел в систему")
         
-        # ОБРАБОТКА ОТЛОЖЕННЫХ ЗАКАЗОВ
         if user_id in pending_orders and pending_orders[user_id]:
             order_rows = pending_orders[user_id].copy()
             pending_orders[user_id] = []
@@ -1352,6 +1351,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not products:
             await safe_edit(query, f"❌ В категории '{category}' нет товаров.")
             return
+        
         keyboard = []
         for p in products:
             if p['in_stock'] and p['quantity'] > 0:
@@ -1362,36 +1362,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='catalog')])
         
         text = f"📦 *{category}*\n\nВыберите товар:"
-        
-        # Проверяем, есть ли фото для категории
         category_photo = CATEGORY_PHOTOS.get(category)
         
-        if category_photo and query.message.photo:
-            try:
-                await query.edit_message_caption(
-                    caption=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Ошибка edit_message_caption: {e}")
-                await query.message.reply_photo(
-                    photo=category_photo,
-                    caption=text,
-                    reply_markup=InlineKeyboardMarkup(keyboard),
-                    parse_mode='Markdown'
-                )
-                await query.message.delete()
-        elif category_photo and not query.message.photo:
-            await query.message.reply_photo(
+        # УДАЛЯЕМ старое сообщение
+        try:
+            await query.message.delete()
+        except Exception as e:
+            logger.error(f"Не удалось удалить старое сообщение: {e}")
+        
+        # ОТПРАВЛЯЕМ новое
+        if category_photo:
+            await query.message.chat.send_photo(
                 photo=category_photo,
                 caption=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
-            await query.message.delete()
         else:
-            await safe_edit(query, text, InlineKeyboardMarkup(keyboard))
+            await query.message.chat.send_message(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
     
     elif data.startswith('product_'):
         product_id = data[8:]
