@@ -41,7 +41,7 @@ PHOTOS = {
 BRATSK_TZ = ZoneInfo("Asia/Irkutsk")
 NIGHT_START = dt_time(21, 0)
 NIGHT_END = dt_time(9, 0)
-DELIVERY_PRICE = 250  # ← ИЗМЕНЕНО НА 250
+DELIVERY_PRICE = 250
 
 
 def get_bratsk_time():
@@ -279,7 +279,6 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Клавиатура с кнопками +/-
     keyboard = []
     for item in cart_items:
         keyboard.append([
@@ -301,7 +300,6 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def update_cart_message(query, user_id):
-    """Обновить сообщение с корзиной"""
     cart_text = get_cart_text(user_id)
     cart_items = get_cart(user_id)
     
@@ -757,7 +755,7 @@ async def notify_admins(context, order, payment_type, order_row, order_id=None):
 
 
 async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
-    """Подтверждение оплаты — здесь списывается товар"""
+    """Подтверждение оплаты — списывает товар, НЕ меняет статус"""
     admin_id = update.effective_user.id
     if not is_admin(admin_id):
         await safe_edit(query, "⛔ У вас нет прав.")
@@ -773,7 +771,7 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
             logger.info(f"📦 Обработка заказа #{order_row}: {items_str[:100]}...")
             
             lines = items_str.split('\n')
-            products = get_all_products()
+            products = get_all_products(force_update=True)
             
             for line in lines:
                 try:
@@ -789,23 +787,26 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
                                 logger.info(f"📦 Списано: {product['name']} x{quantity} → осталось {new_qty}")
                                 break
                 except Exception as e:
-                    logger.warning(f"⚠️ Не удалось распарсить строку: {line} | {e}")
+                    logger.warning(f"⚠️ Не удалось распарсить: {line} | {e}")
     
     except Exception as e:
         logger.error(f"❌ Ошибка списания товаров: {e}")
     
-    # ОБНОВЛЯЕМ СТАТУС
-    update_order_status(int(order_row), 'Выдано')
-    
+    # НЕ МЕНЯЕМ СТАТУС! Просто уведомляем админа
     try:
-        keyboard = [[InlineKeyboardButton("✅ Подтвердить получение", callback_data=f'confirm_{user_id}_{order_row}')]]
-        await context.bot.send_message(
-            user_id,
-            f"✅ *Ваш заказ выдан!*\n\nПожалуйста, подтвердите получение товара.",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
+        await safe_edit(
+            query,
+            f"✅ *Оплата заказа #{order_row} подтверждена!*\n\n"
+            f"📦 Товары списаны со склада.\n\n"
+            f"Теперь измените статус заказа по мере готовности:\n"
+            f"• 📦 Сборка товара\n"
+            f"• 🚚 В пути\n"
+            f"• ✅ Выдано",
+            InlineKeyboardMarkup([[
+                InlineKeyboardButton("📊 Изменить статус", callback_data=f'change_status_{order_row}')
+            ]])
         )
-        await safe_edit(query, "✅ Оплата подтверждена. Товары списаны. Пользователь уведомлен.")
+        logger.info(f"✅ Заказ #{order_row}: оплата подтверждена, товары списаны")
     except Exception as e:
         await safe_edit(query, f"❌ Ошибка: {e}")
 
@@ -1205,7 +1206,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, f"✅ *{product['name']}* добавлен!\n💰 Сумма: *{total:.2f}* руб.\n🔢 Осталось: *{product['quantity'] - current_in_cart - 1}* шт.")
     
     elif data == 'view_cart':
-        await cart_command(update, context)
+        await update_cart_message(query, user_id)
     
     elif data.startswith('remove_'):
         product_id = data[7:]
@@ -1303,7 +1304,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_status = '_'.join(parts[3:])
             await set_order_status(update, context, query, order_row, new_status)
     
-    # ===== ДОСТАВКА И ОТЗЫВЫ =====
+    # ===== ДОСТАВКА И ОТЗЫВЫ (ИСПРАВЛЕНО) =====
     elif data.startswith('deliver_'):
         parts = data.split('_')
         if len(parts) >= 3:
@@ -1326,13 +1327,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith('product_rate_'):
         parts = data.split('_')
+        # product_rate_{value}_{user_id}_{order_row}
         if len(parts) >= 5:
-            await process_rating(update, context, query, 'product', parts[3], parts[4], parts[5])
+            value = parts[2]
+            user_id_from_cb = parts[3]
+            order_row_from_cb = parts[4]
+            await process_rating(update, context, query, 'product', value, user_id_from_cb, order_row_from_cb)
     
     elif data.startswith('service_rate_'):
         parts = data.split('_')
+        # service_rate_{value}_{user_id}_{order_row}
         if len(parts) >= 5:
-            await process_rating(update, context, query, 'service', parts[3], parts[4], parts[5])
+            value = parts[2]
+            user_id_from_cb = parts[3]
+            order_row_from_cb = parts[4]
+            await process_rating(update, context, query, 'service', value, user_id_from_cb, order_row_from_cb)
     
     elif data.startswith('skip_review_'):
         parts = data.split('_')
@@ -1341,8 +1350,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith('comment_'):
         parts = data.split('_')
-        if len(parts) >= 4:
+        if len(parts) >= 3:
             await comment_review(update, context, query, parts[1], parts[2])
+    
+    elif data == 'back_to_menu':
+        await start(update, context)
 
 
 def main():
