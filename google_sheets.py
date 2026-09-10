@@ -14,10 +14,6 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 def get_client():
     """
     Получить авторизованного клиента для Google Sheets.
-    
-    Приоритет:
-    1. Переменная окружения GOOGLE_CREDENTIALS (для продакшена)
-    2. Файл credentials.json (для локальной разработки)
     """
     try:
         creds_json = os.getenv('GOOGLE_CREDENTIALS')
@@ -44,25 +40,21 @@ def get_client():
 
 
 def get_products_sheet():
-    """Получить лист с товарами"""
     client = get_client()
     return client.open_by_key(SHEET_ID).worksheet(PRODUCTS_SHEET)
 
 
 def get_categories_sheet():
-    """Получить лист с категориями"""
     client = get_client()
     return client.open_by_key(SHEET_ID).worksheet(CATEGORIES_SHEET)
 
 
 def get_orders_sheet():
-    """Получить лист с заказами"""
     client = get_client()
     return client.open_by_key(SHEET_ID).worksheet(ORDERS_SHEET)
 
 
 def get_reviews_sheet():
-    """Получить лист с отзывами (создает, если не существует)"""
     client = get_client()
     try:
         return client.open_by_key(SHEET_ID).worksheet(REVIEWS_SHEET)
@@ -100,14 +92,12 @@ def get_all_products():
     """
     Получить все товары из таблицы
     
-    Структура таблицы:
+    Структура:
     A - № (не трогаем)
     B - Наименование товара
     C - Цена
     D - Количество
     E - Сумма (формула)
-    
-    Данные с B2 по E33 (и ниже)
     """
     sheet = get_products_sheet()
     data = sheet.get_all_values()
@@ -159,13 +149,11 @@ def get_all_products():
 
 
 def get_products_by_category(category):
-    """Получить товары по категории"""
     products = get_all_products()
     return [p for p in products if p['category'].lower() == category.lower()]
 
 
 def get_product_by_id(product_id):
-    """Найти товар по ID"""
     products = get_all_products()
     for p in products:
         if p['id'] == product_id:
@@ -206,18 +194,11 @@ def decrease_product_quantity(product_row, amount=1):
 
 
 def add_product_to_sheet(name, price, quantity):
-    """
-    Добавить новый товар в таблицу
-    
-    name: Название товара (B)
-    price: Цена (C)
-    quantity: Количество (D)
-    """
+    """Добавить новый товар в таблицу"""
     try:
         sheet = get_products_sheet()
         data = sheet.get_all_values()
         
-        # Ищем первую свободную строку
         row_number = 2
         for i, row in enumerate(data[1:], start=2):
             if len(row) < 2 or not row[1].strip():
@@ -225,11 +206,10 @@ def add_product_to_sheet(name, price, quantity):
                 break
             row_number = i + 1
         
-        # Записываем данные
-        sheet.update_cell(row_number, 2, name)  # B - Название
-        sheet.update_cell(row_number, 3, str(price))  # C - Цена
-        sheet.update_cell(row_number, 4, str(quantity))  # D - Количество
-        sheet.update_cell(row_number, 5, f"=C{row_number}*D{row_number}")  # E - Сумма
+        sheet.update_cell(row_number, 2, name)
+        sheet.update_cell(row_number, 3, str(price))
+        sheet.update_cell(row_number, 4, str(quantity))
+        sheet.update_cell(row_number, 5, f"=C{row_number}*D{row_number}")
         
         logger.info(f"✅ Товар добавлен: {name} (строка {row_number})")
         return row_number
@@ -264,6 +244,38 @@ def update_order_status(order_row, status):
     """Обновить статус заказа"""
     sheet = get_orders_sheet()
     sheet.update_cell(order_row, 6, status)
+
+
+def get_user_orders(user_id):
+    """
+    Получить все заказы пользователя
+    
+    Возвращает список заказов с их статусами
+    """
+    try:
+        sheet = get_orders_sheet()
+        data = sheet.get_all_values()
+        if len(data) < 2:
+            return []
+        
+        orders = []
+        for i, row in enumerate(data[1:], start=2):
+            if len(row) >= 1 and str(row[0]).strip() == str(user_id):
+                orders.append({
+                    'row': i,
+                    'user_id': row[0].strip() if len(row) > 0 else '',
+                    'username': row[1].strip() if len(row) > 1 else '',
+                    'items': row[2].strip() if len(row) > 2 else '',
+                    'total': row[3].strip() if len(row) > 3 else '0',
+                    'address': row[4].strip() if len(row) > 4 else '',
+                    'status': row[5].strip() if len(row) > 5 else 'Новый',
+                    'date': row[6].strip() if len(row) > 6 else ''
+                })
+        
+        return orders
+    except Exception as e:
+        logger.error(f"Ошибка получения заказов: {e}")
+        return []
 
 
 def save_review(user_id, username, order_id, product_rating, service_rating, comment):
