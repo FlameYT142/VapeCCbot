@@ -8,7 +8,6 @@ DB_PATH = os.getenv('DATA_DIR', '.') + '/cart.db'
 
 
 def init_db():
-    """Инициализировать базу данных"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -54,9 +53,6 @@ def get_connection():
     return sqlite3.connect(DB_PATH)
 
 
-# ============================================
-# СОГЛАСИЕ С 18+
-# ============================================
 def has_user_consented(user_id):
     try:
         conn = get_connection()
@@ -84,9 +80,6 @@ def save_user_consent(user_id):
         return False
 
 
-# ============================================
-# КОРЗИНА
-# ============================================
 def get_cart(user_id):
     try:
         conn = get_connection()
@@ -179,7 +172,6 @@ def remove_from_cart(user_id, product_id):
 
 
 def change_cart_quantity(user_id, product_id, delta):
-    """Изменить количество товара в корзине (delta: +1 или -1)"""
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -248,9 +240,6 @@ def get_cart_text(user_id):
     return text
 
 
-# ============================================
-# ДАННЫЕ ЗАКАЗА
-# ============================================
 def save_order_data(user_id, address, payment_method):
     try:
         conn = get_connection()
