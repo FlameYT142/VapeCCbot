@@ -63,16 +63,25 @@ def get_reviews_sheet():
         return spreadsheet.add_worksheet(title=REVIEWS_SHEET, rows=100, cols=20)
 
 
+# ============================================
+# 📊 ПОЛУЧЕНИЕ КАТЕГОРИЙ (С ЛОГИРОВАНИЕМ)
+# ============================================
 def get_active_categories():
     """Получить активные категории для отображения в меню"""
     try:
         sheet = get_categories_sheet()
         data = sheet.get_all_values()
+        
+        logger.info(f"📊 Лист 'Категории': {len(data)} строк")
+        for i, row in enumerate(data[:5]):
+            logger.info(f"📊 Строка {i+1}: {row}")
+        
         if len(data) < 2:
+            logger.warning("⚠️ Лист 'Категории' пуст или содержит только заголовки")
             return []
         
         categories = []
-        for row in data[1:]:
+        for i, row in enumerate(data[1:], start=2):
             if len(row) >= 4 and row[0].strip():
                 is_active = row[3].strip().lower() == 'да' if len(row) > 3 else True
                 if is_active:
@@ -82,12 +91,20 @@ def get_active_categories():
                         'order': int(row[2]) if len(row) > 2 and row[2].strip().isdigit() else 999,
                         'active': is_active
                     })
+        
+        logger.info(f"✅ Найдено категорий: {len(categories)}")
         return sorted(categories, key=lambda x: x['order'])
+        
     except Exception as e:
-        logger.error(f"Ошибка получения категорий: {e}")
+        logger.error(f"❌ Ошибка получения категорий: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return []
 
 
+# ============================================
+# 📦 ПОЛУЧЕНИЕ ТОВАРОВ
+# ============================================
 def get_all_products():
     """
     Получить все товары из таблицы
@@ -161,6 +178,9 @@ def get_product_by_id(product_id):
     return None
 
 
+# ============================================
+# 🔄 ОБНОВЛЕНИЕ КОЛИЧЕСТВА
+# ============================================
 def update_product_quantity(product_row, new_quantity):
     """Обновить количество товара в таблице"""
     try:
@@ -193,6 +213,9 @@ def decrease_product_quantity(product_row, amount=1):
         return 0
 
 
+# ============================================
+# ➕ ДОБАВЛЕНИЕ ТОВАРА
+# ============================================
 def add_product_to_sheet(name, price, quantity):
     """Добавить новый товар в таблицу"""
     try:
@@ -219,6 +242,9 @@ def add_product_to_sheet(name, price, quantity):
         return None
 
 
+# ============================================
+# 📋 ЗАКАЗЫ
+# ============================================
 def add_order(order_data):
     """Добавить заказ в таблицу"""
     sheet = get_orders_sheet()
@@ -246,11 +272,17 @@ def update_order_status(order_row, status):
     sheet.update_cell(order_row, 6, status)
 
 
+# ============================================
+# 📊 ПОЛУЧЕНИЕ ЗАКАЗОВ (С ЛОГИРОВАНИЕМ)
+# ============================================
 def get_user_orders(user_id):
     """Получить все заказы пользователя"""
     try:
         sheet = get_orders_sheet()
         data = sheet.get_all_values()
+        
+        logger.info(f"📊 Лист 'Заказы': {len(data)} строк")
+        
         if len(data) < 2:
             return []
         
@@ -270,10 +302,15 @@ def get_user_orders(user_id):
         
         return orders
     except Exception as e:
-        logger.error(f"Ошибка получения заказов: {e}")
+        logger.error(f"❌ Ошибка получения заказов: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return []
 
 
+# ============================================
+# ⭐ ОТЗЫВЫ
+# ============================================
 def save_review(user_id, username, order_id, product_rating, service_rating, comment):
     """Сохранить отзыв в таблицу"""
     sheet = get_reviews_sheet()
