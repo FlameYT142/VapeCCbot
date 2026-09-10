@@ -247,11 +247,7 @@ def update_order_status(order_row, status):
 
 
 def get_user_orders(user_id):
-    """
-    Получить все заказы пользователя
-    
-    Возвращает список заказов с их статусами
-    """
+    """Получить все заказы пользователя"""
     try:
         sheet = get_orders_sheet()
         data = sheet.get_all_values()
