@@ -5,6 +5,10 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
+ADMIN_GROUP_ID = os.getenv('ADMIN_GROUP_ID')
+
+if ADMIN_GROUP_ID:
+    ADMIN_GROUP_ID = int(ADMIN_GROUP_ID)
 
 # ============================================
 # АДМИНИСТРАТОРЫ
