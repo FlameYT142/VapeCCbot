@@ -1,17 +1,20 @@
 import logging
 import time
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 from config import (
     BOT_TOKEN, ADMIN_ACCESS, ADMIN_IDS, OWNER_ID, TECH_ADMIN_ID,
-    is_admin, is_owner, get_admin_role, get_admin_code, get_admin_username, check_access_code
+    is_admin, is_owner, get_admin_role, get_admin_code, get_admin_username, check_access_code,
+    get_admin_info
 )
 from google_sheets import (
     get_all_products, get_product_by_id, get_active_categories,
-    get_products_by_category, get_subcategories, get_products_by_subcategory, add_order,
-    update_order_status, save_review
+    get_products_by_category, add_order,
+    update_order_status, save_review,
+    decrease_product_quantity,
+    add_product_to_sheet
 )
 from cart import (
     get_cart, add_to_cart, remove_from_cart, clear_cart,
@@ -28,20 +31,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================
+# 📸 ВСЕ ФОТОГРАФИИ БОТА
+# ============================================
+PHOTOS = {
+    'start': 'https://i.ibb.co/fz9MMDdc/image.jpg',
+    'catalog': 'https://i.ibb.co/Wp66WKzF/image.jpg',
+    'cart': 'https://i.ibb.co/s9hmqnYQ/image.jpg',
+    'payment': 'https://i.ibb.co/PsjnpMSz/image.jpg',
+    'admin': 'https://i.ibb.co/7Jwchtyn/image.jpg',
+}
+
+CATEGORY_PHOTOS = {
+    'Вейп': 'https://i.ibb.co/Jjkzb11W/image.jpg',
+    'Одежда': 'https://i.ibb.co/SwB21cDP/image.jpg',
+    'Техника': 'https://i.ibb.co/BYT9v1n/image.jpg',
+}
+
+# ============================================
 # РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ ПО КАРТЕ
 # ============================================
 PAYMENT_DETAILS = """
-💳 *Реквизиты для перевода:*
+💳 *Оплата по карте*
 
-🏦 Банк: Т-Банк
-📱 Номер карты: 1234 5678 9012 3456
-👤 Получатель: Иванов Иван Иванович
+🏦 Банк: Альфа-Банк
+📱 Номер карты: +7 901 659 30 98
+👤 Получатель: Артём Николаевич И.
 
 📝 *Инструкция:*
-1. Переведите сумму *{total:.2f}* руб. на указанную карту
+1. Переведите сумму *{total:.2f}* руб. на указанный номер карты
 2. В комментарии укажите номер заказа: #{order_id}
-3. После оплаты пришлите скриншот чек-экрана в личные сообщения @support
-4. Ожидайте подтверждения от менеджера
+3. После перевода **сохраните чек** (скриншот или фото)
+
+📸 *Чек нужно сохранить!*
+Если оплата вдруг не будет видна, чек останется подтверждением вашей оплаты.
 """
 
 # ============================================
@@ -57,26 +79,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username
     
+    text = (
+        f"✨ *VAPE CITY*\n"
+        f"Тёплый маркетплейс в холодный сезон.\n"
+        f"Оформляйте заказы через бота — быстро, уютно, без лишних движений.\n\n"
+        f"🍂 @{username if username else 'Гость'}, мы рады видеть вас снова!\n"
+        f"Осень — время новых вкусов и тёплых покупок.\n\n"
+        f"💜 *Уже в каталоге*\n"
+        f"Вейп-продукция — вся палитра осенних настроений.\n"
+        f"Выбирайте и заказывайте с комфортом.\n\n"
+        f"🌙 *Скоро появится*\n"
+        f"Одежда · Техника\n"
+        f"Следите за обновлениями — мы готовим что-то особенное.\n\n"
+        f"Выберите раздел ниже и окунитесь в уютный шопинг 🍁💜"
+    )
+    
     keyboard = [
-        [InlineKeyboardButton("🛍️ Каталог", callback_data='catalog')],
-        [InlineKeyboardButton("🛒 Корзина", callback_data='view_cart')],
-        [InlineKeyboardButton("ℹ️ О магазине", callback_data='about')],
+        [KeyboardButton("🛍️ Каталог"), KeyboardButton("🛒 Корзина")],
+        [KeyboardButton("ℹ️ О магазине"), KeyboardButton("📋 Мои заказы")],
     ]
     
     if user_id in admin_sessions and admin_sessions[user_id]:
-        keyboard.append([InlineKeyboardButton("⚙️ Админ-панель", callback_data='admin_panel')])
+        keyboard.append([KeyboardButton("⚙️ Админ-панель")])
     
-    greeting = f"@{username}" if username else "Гость"
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
     
-    await update.message.reply_text(
-        f"🛍️ *VapeCity - 24/7*\n\n"
-        f"Добро пожаловать, {greeting}!\n"
-        f"Здесь вы найдете:\n"
-        f"💨 *Вейп-продукцию* (доступно сейчас)\n"
-        f"👕 *Одежду* (скоро)\n"
-        f"📱 *Технику* (скоро)\n\n"
-        f"Выберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    await update.message.reply_photo(
+        photo=PHOTOS['start'],
+        caption=text,
+        reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
@@ -118,7 +153,7 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 Вы вошли как: *{role_name}*\n"
             f"🆔 Ваш ID: `{user_id}`\n"
             f"📱 Username: {admin_username}\n\n"
-            f"Теперь админ-панель доступна в главном меню.\n"
+            f"Теперь админ-панель доступна в меню.\n"
             f"Для выхода используйте `/admin logout`",
             parse_mode='Markdown'
         )
@@ -154,39 +189,68 @@ async def admin_logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"🔒 Администратор вышел из системы ({user_id})")
 
 # ============================================
-# КОМАНДЫ
+# КАТАЛОГ
 # ============================================
 async def catalog_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     categories = get_active_categories()
     if not categories:
         await update.message.reply_text("📭 Каталог пуст.")
         return
+    
+    text = "📦 *Каталог VapeCity*\n\nВыберите категорию:\n\n"
+    for cat in categories:
+        status = "✅" if cat['active'] else "⏳"
+        text += f"{cat['emoji']} *{cat['name']}* {status}\n"
+    text += "\n⬇️ Нажмите на категорию ниже:"
+    
     keyboard = []
     for cat in categories:
         emoji = cat['emoji']
         status = " (Скоро)" if not cat['active'] else ""
         keyboard.append([InlineKeyboardButton(f"{emoji} {cat['name']}{status}", callback_data=f'cat_{cat["name"]}')])
-    await update.message.reply_text("📦 *Выберите категорию:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-
-async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    cart_text = get_cart_text(user_id)
-    cart_items = get_cart(user_id)
-    if not cart_items:
-        await update.message.reply_text(cart_text, parse_mode='Markdown')
-        return
-    keyboard = []
-    for item in cart_items:
-        keyboard.append([InlineKeyboardButton(f"❌ Убрать {item['name']} (x{item['quantity']})", callback_data=f'remove_{item["id"]}')])
-    keyboard.append([InlineKeyboardButton("🔄 Очистить корзину", callback_data='clear_cart')])
-    keyboard.append([InlineKeyboardButton("✅ Оформить заказ", callback_data='checkout')])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')])
-    await update.message.reply_text(
-        cart_text + "\n\nЧто хотите сделать?",
+    
+    await update.message.reply_photo(
+        photo=PHOTOS['catalog'],
+        caption=text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
+# ============================================
+# КОРЗИНА
+# ============================================
+async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    cart_text = get_cart_text(user_id)
+    cart_items = get_cart(user_id)
+    
+    if not cart_items:
+        await update.message.reply_photo(
+            photo=PHOTOS['cart'],
+            caption=cart_text + "\n\n🛍️ Добавьте товары из каталога!",
+            parse_mode='Markdown'
+        )
+        return
+    
+    keyboard = []
+    for item in cart_items:
+        keyboard.append([InlineKeyboardButton(
+            f"❌ Убрать {item['name']} (x{item['quantity']})", 
+            callback_data=f'remove_{item["id"]}'
+        )])
+    keyboard.append([InlineKeyboardButton("🔄 Очистить корзину", callback_data='clear_cart')])
+    keyboard.append([InlineKeyboardButton("✅ Оформить заказ", callback_data='checkout')])
+    
+    await update.message.reply_photo(
+        photo=PHOTOS['cart'],
+        caption=cart_text + "\n\nЧто хотите сделать?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+# ============================================
+# HELP
+# ============================================
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     help_text = (
@@ -200,9 +264,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. Выберите товары в каталоге\n"
         "2. Добавьте их в корзину\n"
         "3. Оформите заказ\n"
-        "4. Укажите адрес и способ оплаты\n\n"
-        "📞 *Контакты:*\n"
-        "По всем вопросам: @support"
+        "4. Укажите адрес и способ оплаты"
     )
     if is_admin(user_id):
         role = get_admin_role(user_id)
@@ -213,48 +275,186 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 # ============================================
+# О МАГАЗИНЕ
+# ============================================
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "ℹ️ *О магазине VapeCity - 24/7*\n\n"
+        "🛍️ Мы - ваш надежный поставщик вейп-продукции.\n\n"
+        "📦 *Что мы предлагаем:*\n"
+        "  • 💨 Вейпы и жидкости\n"
+        "  • 👕 Одежда (скоро)\n"
+        "  • 📱 Техника (скоро)\n\n"
+        "⏰ *Режим работы:* Круглосуточно!"
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+# ============================================
+# МОИ ЗАКАЗЫ
+# ============================================
+async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📋 *История ваших заказов*\n\n"
+        "📦 У вас пока нет заказов.\n\n"
+        "🛍️ Перейдите в каталог, чтобы сделать первый заказ!"
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+# ============================================
 # ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ
 # ============================================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     
+    # ===== ДОБАВЛЕНИЕ ТОВАРА =====
+    if context.user_data.get('adding_product'):
+        step = context.user_data.get('adding_step')
+        
+        if step == 'name':
+            context.user_data['new_product_name'] = text
+            context.user_data['adding_step'] = 'price'
+            await update.message.reply_text(
+                f"✅ Название: *{text}*\n\n"
+                f"💰 Введите *цену* товара (в рублях):\n"
+                f"Пример: `1200.50`\n\n"
+                f"Для отмены: /cancel",
+                parse_mode='Markdown'
+            )
+            return
+        
+        elif step == 'price':
+            try:
+                price = float(text.replace(',', '.'))
+                context.user_data['new_product_price'] = price
+                context.user_data['adding_step'] = 'quantity'
+                await update.message.reply_text(
+                    f"✅ Цена: *{price:.2f}* руб.\n\n"
+                    f"📦 Введите *количество* товара:\n"
+                    f"Пример: `10`\n\n"
+                    f"Для отмены: /cancel",
+                    parse_mode='Markdown'
+                )
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ Неверный формат цены.\n"
+                    "Введите число, например: `1200.50`",
+                    parse_mode='Markdown'
+                )
+            return
+        
+        elif step == 'quantity':
+            try:
+                quantity = int(text)
+                name = context.user_data.get('new_product_name')
+                price = context.user_data.get('new_product_price')
+                
+                row = add_product_to_sheet(name, price, quantity)
+                
+                if row:
+                    context.user_data['adding_product'] = False
+                    context.user_data['adding_step'] = None
+                    context.user_data.pop('new_product_name', None)
+                    context.user_data.pop('new_product_price', None)
+                    
+                    await update.message.reply_text(
+                        f"✅ *Товар добавлен!*\n\n"
+                        f"📦 Название: *{name}*\n"
+                        f"💰 Цена: *{price:.2f}* руб.\n"
+                        f"🔢 Количество: *{quantity}* шт.\n"
+                        f"💵 Сумма: *{price * quantity:.2f}* руб.\n\n"
+                        f"Товар появился в каталоге! 🎉",
+                        parse_mode='Markdown'
+                    )
+                    logger.info(f"✅ Админ {user_id} добавил товар: {name}")
+                else:
+                    await update.message.reply_text("❌ Ошибка добавления товара.")
+            except ValueError:
+                await update.message.reply_text(
+                    "❌ Неверный формат количества.\n"
+                    "Введите целое число, например: `10`",
+                    parse_mode='Markdown'
+                )
+            return
+    
+    # ===== КНОПКИ МЕНЮ =====
+    if text == "🛍️ Каталог":
+        await catalog_command(update, context)
+        return
+    elif text == "🛒 Корзина":
+        await cart_command(update, context)
+        return
+    elif text == "ℹ️ О магазине":
+        await about_command(update, context)
+        return
+    elif text == "📋 Мои заказы":
+        await my_orders_command(update, context)
+        return
+    elif text == "⚙️ Админ-панель":
+        if user_id in admin_sessions and admin_sessions[user_id]:
+            keyboard = [
+                [InlineKeyboardButton("📦 Управление товарами", callback_data='admin_products')],
+                [InlineKeyboardButton("📊 Просмотр заказов", callback_data='admin_orders')],
+                [InlineKeyboardButton("📈 Статистика", callback_data='admin_stats')],
+                [InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')],
+            ]
+            await update.message.reply_photo(
+                photo=PHOTOS['admin'],
+                caption="⚙️ *Админ-панель*\n\nВыберите действие:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                "🔑 *Доступ запрещен*\n\nДля входа используйте:\n`/admin [пароль]`",
+                parse_mode='Markdown'
+            )
+        return
+    
+    # ===== ОТМЕНА =====
     if text.lower() == '/cancel':
         context.user_data['awaiting_address'] = False
         context.user_data['awaiting_review'] = False
+        context.user_data['adding_product'] = False
+        context.user_data['adding_step'] = None
+        context.user_data.pop('new_product_name', None)
+        context.user_data.pop('new_product_price', None)
         clear_order_data(user_id)
-        await update.message.reply_text("❌ Оформление заказа отменено.")
+        await update.message.reply_text("❌ Действие отменено.")
         return
     
+    # ===== АДРЕС =====
     if context.user_data.get('awaiting_address'):
         cart_items = get_cart(user_id)
         if not cart_items:
             await update.message.reply_text("🛒 Корзина пуста.")
             context.user_data['awaiting_address'] = False
             return
+        
         save_order_data(user_id, text, None)
         context.user_data['awaiting_address'] = False
         total = get_cart_total(user_id)
+        
         keyboard = [
             [InlineKeyboardButton("💵 Наличные (при получении)", callback_data='payment_cash')],
             [InlineKeyboardButton("💳 Перевод по карте", callback_data='payment_card')],
-            [InlineKeyboardButton("🔙 Назад", callback_data='view_cart')],
         ]
-        await update.message.reply_text(
-            f"📍 Адрес: {text}\n💰 Сумма: *{total:.2f}* руб.\n\n*Выберите способ оплаты:*",
+        
+        await update.message.reply_photo(
+            photo=PHOTOS['payment'],
+            caption=f"📍 Адрес: {text}\n💰 Сумма: *{total:.2f}* руб.\n\n*Выберите способ оплаты:*",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
         return
     
+    # ===== ОТЗЫВ =====
     if context.user_data.get('awaiting_review'):
         review_data = context.user_data.get('review_data', {})
         if review_data:
             if text.isdigit() and 1 <= int(text) <= 5:
                 return
             user_username = update.effective_user.username
-            review_data['comment'] = text
-            context.user_data['review_data'] = review_data
             save_review(
                 user_id,
                 f"@{user_username}" if user_username else str(user_id),
@@ -282,14 +482,19 @@ async def process_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE, q
     if not cart_items:
         await query.edit_message_text("🛒 Корзина пуста.")
         return
+    
     out_of_stock = []
     for item in cart_items:
         product = get_product_by_id(item['id'])
         if product and not product['in_stock']:
             out_of_stock.append(item['name'])
+    
     if out_of_stock:
-        await query.edit_message_text(f"❌ Нет в наличии:\n" + "\n".join(out_of_stock) + "\n\nУдалите их из корзины.")
+        await query.edit_message_text(
+            f"❌ Нет в наличии:\n" + "\n".join(out_of_stock) + "\n\nУдалите их из корзины."
+        )
         return
+    
     context.user_data['awaiting_address'] = True
     await query.edit_message_text("📍 Введите адрес доставки.\nДля отмены: /cancel")
 
@@ -299,6 +504,7 @@ async def process_payment_selection(update: Update, context: ContextTypes.DEFAUL
     if not order_data.get('address'):
         await query.edit_message_text("❌ Ошибка: не указан адрес.")
         return
+    
     save_order_data(user_id, order_data['address'], payment_method)
     if payment_method == 'cash':
         await process_cash_order(update, query, user_id)
@@ -310,6 +516,12 @@ async def process_cash_order(update, query, user_id):
     total = get_cart_total(user_id)
     order_data = get_order_data(user_id)
     username = update.effective_user.username
+    
+    # СПИСЫВАЕМ ТОВАРЫ
+    for item in cart_items:
+        if item.get('row'):
+            decrease_product_quantity(item['row'], item['quantity'])
+            logger.info(f"📦 Списано: {item['name']} x{item['quantity']}")
     
     order = {
         'user_id': user_id,
@@ -344,6 +556,12 @@ async def process_card_order(update, query, user_id):
     order_id = f"{user_id % 10000}{int(time.time()) % 10000}"
     payment_text = PAYMENT_DETAILS.format(total=total, order_id=order_id)
     
+    # СПИСЫВАЕМ ТОВАРЫ
+    for item in cart_items:
+        if item.get('row'):
+            decrease_product_quantity(item['row'], item['quantity'])
+            logger.info(f"📦 Списано: {item['name']} x{item['quantity']}")
+    
     order = {
         'user_id': user_id,
         'username': f"@{username}" if username else str(user_id),
@@ -358,17 +576,21 @@ async def process_card_order(update, query, user_id):
     clear_order_data(user_id)
     context.user_data['awaiting_address'] = False
     
-    await query.edit_message_text(
-        f"✅ *Заказ оформлен!*\n\n"
-        f"📍 Адрес: {order['address']}\n"
-        f"💰 Сумма: *{total:.2f}* руб.\n"
-        f"💳 Оплата: *Перевод по карте*\n"
-        f"🆔 Заказ: #{order_id}\n\n"
-        f"{payment_text}\n\n"
-        f"⚠️ Заказ отправится после подтверждения оплаты.\n"
-        f"Спасибо за покупку! 🎉",
+    await query.message.reply_photo(
+        photo=PHOTOS['payment'],
+        caption=(
+            f"✅ *Заказ оформлен!*\n\n"
+            f"📍 Адрес: {order['address']}\n"
+            f"💰 Сумма: *{total:.2f}* руб.\n"
+            f"💳 Оплата: *Перевод по карте*\n"
+            f"🆔 Заказ: #{order_id}\n\n"
+            f"{payment_text}\n\n"
+            f"⚠️ Заказ отправится после подтверждения оплаты.\n"
+            f"Спасибо за покупку! 🎉"
+        ),
         parse_mode='Markdown'
     )
+    await query.message.delete()
     await notify_admins(context, order, 'карта', order_row, order_id)
 
 async def notify_admins(context, order, payment_type, order_row, order_id=None):
@@ -400,14 +622,16 @@ async def notify_admins(context, order, payment_type, order_row, order_id=None):
             logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
 
 # ============================================
-# ПОДТВЕРЖДЕНИЕ ДОСТАВКИ И ОТЗЫВЫ
+# ПОДТВЕРЖДЕНИЕ ДОСТАВКИ
 # ============================================
 async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     admin_id = update.effective_user.id
     if not is_admin(admin_id):
         await query.edit_message_text("⛔ У вас нет прав.")
         return
+    
     update_order_status(int(order_row), 'Доставлен')
+    
     try:
         keyboard = [
             [InlineKeyboardButton("✅ Подтвердить получение", callback_data=f'confirm_{user_id}_{order_row}')]
@@ -419,7 +643,6 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
             parse_mode='Markdown'
         )
         await query.edit_message_text("✅ Пользователь уведомлен о доставке.")
-        logger.info(f"📦 Заказ #{order_row} доставлен пользователю {user_id}")
     except Exception as e:
         await query.edit_message_text(f"❌ Ошибка: {e}")
 
@@ -428,7 +651,9 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
     if current_user != int(user_id):
         await query.edit_message_text("⛔ Это не ваш заказ.")
         return
+    
     update_order_status(int(order_row), 'Подтвержден получение')
+    
     keyboard = [
         [InlineKeyboardButton("⭐ Оценить товар", callback_data=f'rate_product_{user_id}_{order_row}')],
         [InlineKeyboardButton("⭐ Оценить сервис", callback_data=f'rate_service_{user_id}_{order_row}')],
@@ -442,13 +667,8 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, qu
     )
     context.user_data['review_data'] = {'user_id': user_id, 'order_id': order_row}
     context.user_data['awaiting_review'] = True
-    logger.info(f"✅ Пользователь {user_id} подтвердил получение заказа #{order_row}")
 
 async def rate_product(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
-    current_user = update.effective_user.id
-    if current_user != int(user_id):
-        await query.edit_message_text("⛔ Это не ваш заказ.")
-        return
     keyboard = [
         [InlineKeyboardButton("⭐ 1", callback_data=f'product_rate_1_{user_id}_{order_row}')],
         [InlineKeyboardButton("⭐ 2", callback_data=f'product_rate_2_{user_id}_{order_row}')],
@@ -463,10 +683,6 @@ async def rate_product(update: Update, context: ContextTypes.DEFAULT_TYPE, query
     )
 
 async def rate_service(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
-    current_user = update.effective_user.id
-    if current_user != int(user_id):
-        await query.edit_message_text("⛔ Это не ваш заказ.")
-        return
     keyboard = [
         [InlineKeyboardButton("⭐ 1", callback_data=f'service_rate_1_{user_id}_{order_row}')],
         [InlineKeyboardButton("⭐ 2", callback_data=f'service_rate_2_{user_id}_{order_row}')],
@@ -481,10 +697,6 @@ async def rate_service(update: Update, context: ContextTypes.DEFAULT_TYPE, query
     )
 
 async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, query, rating_type, value, user_id, order_row):
-    current_user = update.effective_user.id
-    if current_user != int(user_id):
-        await query.edit_message_text("⛔ Это не ваш заказ.")
-        return
     review_data = context.user_data.get('review_data', {})
     if rating_type == 'product':
         review_data['product_rating'] = int(value)
@@ -492,7 +704,9 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, que
     elif rating_type == 'service':
         review_data['service_rating'] = int(value)
         await query.edit_message_text(f"✅ Оценка сервиса: {value} ⭐")
+    
     context.user_data['review_data'] = review_data
+    
     if review_data.get('product_rating') and review_data.get('service_rating'):
         keyboard = [
             [InlineKeyboardButton("✏️ Написать комментарий", callback_data=f'comment_{user_id}_{order_row}')],
@@ -505,10 +719,6 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, que
         )
 
 async def skip_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
-    current_user = update.effective_user.id
-    if current_user != int(user_id):
-        await query.edit_message_text("⛔ Это не ваш заказ.")
-        return
     review_data = context.user_data.get('review_data', {})
     save_review(
         user_id,
@@ -526,10 +736,6 @@ async def skip_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query,
     )
 
 async def comment_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
-    current_user = update.effective_user.id
-    if current_user != int(user_id):
-        await query.edit_message_text("⛔ Это не ваш заказ.")
-        return
     await query.edit_message_text(
         "✏️ *Напишите ваш комментарий:*\n\n"
         "Поделитесь впечатлениями о товаре и сервисе.",
@@ -545,18 +751,22 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, q
     if user_id not in admin_sessions or not admin_sessions[user_id]:
         await query.edit_message_text("🔑 *Доступ запрещен*\n\nДля доступа используйте `/admin [код]`", parse_mode='Markdown')
         return
+    
     role = get_admin_role(user_id)
     role_name = "Владелец" if role == 'owner' else "Технический администратор"
+    
     keyboard = [
         [InlineKeyboardButton("📦 Управление товарами", callback_data='admin_products')],
         [InlineKeyboardButton("📊 Просмотр заказов", callback_data='admin_orders')],
         [InlineKeyboardButton("📈 Статистика", callback_data='admin_stats')],
     ]
+    
     if is_owner(user_id):
         keyboard.append([InlineKeyboardButton("👥 Управление админами", callback_data='admin_users')])
         keyboard.append([InlineKeyboardButton("⚙️ Настройки бота", callback_data='admin_settings')])
+    
     keyboard.append([InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')])
+    
     await query.edit_message_text(
         f"⚙️ *Админ-панель*\n\n👤 *{role_name}*\n🆔 `{user_id}`\n🔐 Сессия активна\n\nВыберите действие:",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -568,10 +778,9 @@ async def admin_products(update: Update, context: ContextTypes.DEFAULT_TYPE, que
     if user_id not in admin_sessions or not admin_sessions[user_id]:
         await query.edit_message_text("🔑 Пожалуйста, авторизуйтесь.")
         return
+    
     keyboard = [
         [InlineKeyboardButton("➕ Добавить товар", callback_data='admin_add_product')],
-        [InlineKeyboardButton("✏️ Редактировать товар", callback_data='admin_edit_product')],
-        [InlineKeyboardButton("🗑️ Удалить товар", callback_data='admin_delete_product')],
         [InlineKeyboardButton("📋 Список товаров", callback_data='admin_list_products')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
     ]
@@ -582,9 +791,9 @@ async def admin_orders(update: Update, context: ContextTypes.DEFAULT_TYPE, query
     if user_id not in admin_sessions or not admin_sessions[user_id]:
         await query.edit_message_text("🔑 Пожалуйста, авторизуйтесь.")
         return
+    
     keyboard = [
         [InlineKeyboardButton("📋 Все заказы", callback_data='admin_list_orders')],
-        [InlineKeyboardButton("🆕 Новые заказы", callback_data='admin_new_orders')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
     ]
     await query.edit_message_text("📊 *Управление заказами*\n\nВыберите статус:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -594,6 +803,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, query)
     if user_id not in admin_sessions or not admin_sessions[user_id]:
         await query.edit_message_text("🔑 Пожалуйста, авторизуйтесь.")
         return
+    
     stats_text = """
 📈 *Статистика магазина*
 
@@ -605,22 +815,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE, query)
     keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='admin_stats')], [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')]]
     await query.edit_message_text(stats_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
-async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE, query):
-    user_id = update.effective_user.id
-    if not is_owner(user_id):
-        await query.edit_message_text("⛔ Только для владельца.")
-        return
-    admins_list = ""
-    for uid, info in ADMIN_ACCESS.items():
-        role_name = "👑 Владелец" if info['role'] == 'owner' else "🛠️ Технический администратор"
-        admins_list += f"• `{uid}` - {role_name}\n  Пароль: `{info['code']}`\n"
-    keyboard = [
-        [InlineKeyboardButton("➕ Добавить админа", callback_data='admin_add_user')],
-        [InlineKeyboardButton("🗑️ Удалить админа", callback_data='admin_remove_user')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
-    ]
-    await query.edit_message_text(f"👥 *Управление админами*\n\n{admins_list}\n\nВыберите действие:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-
 # ============================================
 # ГЛАВНЫЙ ОБРАБОТЧИК КНОПОК
 # ============================================
@@ -630,7 +824,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = update.effective_user.id
     
-    # Каталог
+    # ===== КАТАЛОГ =====
     if data == 'catalog':
         categories = get_active_categories()
         if not categories:
@@ -641,7 +835,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             emoji = cat['emoji']
             status = " (Скоро)" if not cat['active'] else ""
             keyboard.append([InlineKeyboardButton(f"{emoji} {cat['name']}{status}", callback_data=f'cat_{cat["name"]}')])
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')])
         await query.edit_message_text("📦 *Выберите категорию:*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     
     elif data.startswith('cat_'):
@@ -652,7 +845,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         keyboard = []
         for p in products:
-            status = "✅" if p['in_stock'] else "❌"
+            if p['in_stock'] and p['quantity'] > 0:
+                status = f"✅ {p['quantity']} шт."
+            else:
+                status = "❌ Нет"
             keyboard.append([InlineKeyboardButton(f"{p['name']} - {p['price']:.2f} руб. {status}", callback_data=f'product_{p["id"]}')])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='catalog')])
         await query.edit_message_text(f"📦 *{category}*\n\nВыберите товар:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
@@ -663,26 +859,49 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not product:
             await query.edit_message_text("❌ Товар не найден.")
             return
-        text = f"*{product['name']}*\n\n💰 Цена: *{product['price']:.2f}* руб.\n📂 Категория: {product['category']}\n"
-        if product['description']:
-            text += f"📝 {product['description']}\n"
-        text += f"📦 В наличии: {'✅ Да' if product['in_stock'] else '❌ Нет'}"
+        text = f"*{product['name']}*\n\n💰 Цена: *{product['price']:.2f}* руб.\n"
+        if product['in_stock'] and product['quantity'] > 0:
+            text += f"📦 В наличии: ✅ Да\n🔢 Осталось: *{product['quantity']}* шт.\n"
+        else:
+            text += f"📦 В наличии: ❌ Нет\n"
         keyboard = []
-        if product['in_stock']:
+        if product['in_stock'] and product['quantity'] > 0:
             keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f'add_{product_id}')])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f'cat_{product["category"]}')])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     
-    # Корзина
+    # ===== КОРЗИНА =====
     elif data.startswith('add_'):
         product_id = data[4:]
         product = get_product_by_id(product_id)
         if not product:
             await query.edit_message_text("❌ Товар не найден.")
             return
+        
+        if not product['in_stock'] or product['quantity'] <= 0:
+            await query.edit_message_text(f"❌ *Товар закончился!*\n\n*{product['name']}* временно недоступен.", parse_mode='Markdown')
+            return
+        
+        cart = get_cart(user_id)
+        current_in_cart = 0
+        for item in cart:
+            if item['id'] == product_id:
+                current_in_cart = item['quantity']
+                break
+        
+        if current_in_cart >= product['quantity']:
+            await query.edit_message_text(
+                f"⚠️ *Максимум!*\n\nВ наличии только *{product['quantity']}* шт.\nУ вас уже {current_in_cart} шт. в корзине.",
+                parse_mode='Markdown'
+            )
+            return
+        
         add_to_cart(user_id, product)
         total = get_cart_total(user_id)
-        await query.edit_message_text(f"✅ *{product['name']}* добавлен!\n💰 Сумма: *{total:.2f}* руб.", parse_mode='Markdown')
+        await query.edit_message_text(
+            f"✅ *{product['name']}* добавлен!\n💰 Сумма: *{total:.2f}* руб.\n🔢 Осталось: *{product['quantity'] - current_in_cart - 1}* шт.",
+            parse_mode='Markdown'
+        )
     
     elif data == 'view_cart':
         cart_text = get_cart_text(user_id)
@@ -695,7 +914,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(f"❌ Убрать {item['name']} (x{item['quantity']})", callback_data=f'remove_{item["id"]}')])
         keyboard.append([InlineKeyboardButton("🔄 Очистить корзину", callback_data='clear_cart')])
         keyboard.append([InlineKeyboardButton("✅ Оформить заказ", callback_data='checkout')])
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')])
         await query.edit_message_text(cart_text + "\n\nЧто хотите сделать?", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     
     elif data.startswith('remove_'):
@@ -719,21 +937,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_method = data[8:]
         await process_payment_selection(update, context, query, payment_method)
     
-    # О магазине
-    elif data == 'about':
-        await query.edit_message_text(
-            "ℹ️ *О магазине VapeCity - 24/7*\n\n"
-            "🛍️ Надежный поставщик вейп-продукции.\n\n"
-            "📦 *Что мы предлагаем:*\n"
-            "• 💨 Вейпы и жидкости\n"
-            "• 👕 Одежда (скоро)\n"
-            "• 📱 Техника (скоро)\n\n"
-            "⏰ *Круглосуточно!*\n\n"
-            "📞 *Контакты:* @support",
-            parse_mode='Markdown'
-        )
-    
-    # Админ-панель
+    # ===== АДМИН-ПАНЕЛЬ =====
     elif data == 'admin_panel':
         await show_admin_panel(update, context, query)
     
@@ -746,16 +950,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'admin_stats':
         await admin_stats(update, context, query)
     
-    elif data == 'admin_users':
-        await admin_users(update, context, query)
+    elif data == 'admin_add_product':
+        if user_id not in admin_sessions or not admin_sessions[user_id]:
+            await query.edit_message_text("🔑 Пожалуйста, авторизуйтесь.")
+            return
+        context.user_data['adding_product'] = True
+        context.user_data['adding_step'] = 'name'
+        await query.edit_message_text(
+            "➕ *Добавление товара*\n\n📦 Шаг 1/3: Введите *название* товара\n\nПример: `Хаски Под`\n\nДля отмены: /cancel",
+            parse_mode='Markdown'
+        )
     
     elif data == 'admin_logout':
         if user_id in admin_sessions:
             del admin_sessions[user_id]
             await query.edit_message_text("👋 *Выход выполнен*", parse_mode='Markdown')
-            logger.info(f"🔒 Администратор вышел ({user_id})")
     
-    # Доставка и отзывы
+    # ===== ДОСТАВКА И ОТЗЫВЫ =====
     elif data.startswith('deliver_'):
         parts = data.split('_')
         if len(parts) >= 3:
@@ -795,9 +1006,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.split('_')
         if len(parts) >= 4:
             await comment_review(update, context, query, parts[1], parts[2])
-    
-    elif data == 'back_to_menu':
-        await start(update, context)
 
 # ============================================
 # ЗАПУСК БОТА
@@ -805,17 +1013,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Команды
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('help', help_command))
     app.add_handler(CommandHandler('catalog', catalog_command))
     app.add_handler(CommandHandler('cart', cart_command))
-    
-    # Скрытые команды для админов
     app.add_handler(CommandHandler('admin', admin_login))
     app.add_handler(CommandHandler('adminlogout', admin_logout))
     
-    # Обработчики
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
