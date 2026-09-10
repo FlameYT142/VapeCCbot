@@ -7,28 +7,27 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 
 # ============================================
-# АДМИНИСТРАТОРЫ С УНИКАЛЬНЫМИ ПАРОЛЯМИ
+# АДМИНИСТРАТОРЫ
 # ============================================
 ADMIN_ACCESS = {
-    8494622112: {  # @voloki4 - ВЛАДЕЛЕЦ
+    8494622112: {
         'role': 'owner',
         'code': 'admin672345',
         'username': '@voloki4'
     },
-    1302410770: {  # @myhzxc - ТЕХНИЧЕСКИЙ АДМИНИСТРАТОР
+    1302410770: {
         'role': 'admin',
         'code': 'zxcmayoho222',
         'username': '@myhzxc'
     },
 }
 
-# Для проверки
 ADMIN_IDS = list(ADMIN_ACCESS.keys())
 OWNER_ID = 8494622112
 TECH_ADMIN_ID = 1302410770
 
 # ============================================
-# НАЗВАНИЯ ЛИСТОВ В GOOGLE TABLES
+# НАЗВАНИЯ ЛИСТОВ
 # ============================================
 PRODUCTS_SHEET = 'Табель цеников'
 CATEGORIES_SHEET = 'Категории'
@@ -36,7 +35,7 @@ ORDERS_SHEET = 'Заказы'
 REVIEWS_SHEET = 'Отзывы'
 
 # ============================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ФУНКЦИИ
 # ============================================
 def get_admin_info(user_id):
     return ADMIN_ACCESS.get(user_id)
