@@ -67,8 +67,6 @@ def get_active_categories():
         sheet = get_categories_sheet()
         data = sheet.get_all_values()
         
-        logger.info(f"📊 Лист 'Категории': {len(data)} строк")
-        
         if len(data) < 2:
             return []
         
@@ -84,27 +82,14 @@ def get_active_categories():
                         'active': is_active
                     })
         
-        logger.info(f"✅ Найдено категорий: {len(categories)}")
         return sorted(categories, key=lambda x: x['order'])
         
     except Exception as e:
         logger.error(f"❌ Ошибка получения категорий: {type(e).__name__}: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
         return []
 
 
-def get_all_products():
-    """
-    Получить все товары из таблицы
-    
-    Структура:
-    A - № (не трогаем)
-    B - Наименование товара
-    C - Цена
-    D - Количество
-    E - Сумма (формула)
-    """
+def get_all_products(force_update=False):
     sheet = get_products_sheet()
     data = sheet.get_all_values()
     if len(data) < 2:
@@ -137,8 +122,6 @@ def get_all_products():
                 'name': name,
                 'category': 'Вейп',
                 'price': price,
-                'description': '',
-                'photo': '',
                 'in_stock': quantity > 0,
                 'quantity': quantity,
                 'row': i
@@ -171,7 +154,6 @@ def update_product_quantity(product_row, new_quantity):
     try:
         sheet = get_products_sheet()
         sheet.update_cell(product_row, 4, str(new_quantity))
-        logger.info(f"✅ Товар строка {product_row}: количество = {new_quantity}")
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка обновления количества: {e}")
@@ -223,7 +205,6 @@ def add_product_to_sheet(name, price, quantity):
 
 
 def add_order(order_data):
-    """Добавить заказ в таблицу"""
     now = datetime.now(BRATSK_TZ)
     
     sheet = get_orders_sheet()
@@ -263,12 +244,9 @@ def update_order_status(order_row, status):
 
 
 def get_user_orders(user_id):
-    """Получить все заказы пользователя"""
     try:
         sheet = get_orders_sheet()
         data = sheet.get_all_values()
-        
-        logger.info(f"📊 Лист 'Заказы': {len(data)} строк")
         
         if len(data) < 2:
             return []
