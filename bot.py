@@ -528,6 +528,20 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_send(update.message.reply_text, text, parse_mode='Markdown')
 
 
+# ============================================
+# МОИ ЗАКАЗЫ (список + карточки)
+# ============================================
+STATUS_EMOJI = {
+    'Новый': '🆕',
+    'Ожидает оплаты (наличные)': '💵',
+    'Ожидает оплаты (карта)': '💳',
+    'Сборка товара': '📦',
+    'В пути': '🚚',
+    'Выдано': '✅',
+    'Подтвержден получение': '✅',
+}
+
+
 async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ['group', 'supergroup']:
         return
@@ -538,43 +552,80 @@ async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
+    await show_orders_list(update, context)
+
+
+async def show_orders_list(update, context, edit=False, query=None):
+    """Список заказов в виде кнопок."""
+    if query is not None:
+        user_id = update.effective_user.id
+    else:
+        user_id = update.effective_user.id
+
     orders = get_user_orders(user_id)
 
     if not orders:
-        await safe_send(
-            update.message.reply_text,
+        text = (
             "📋 *История ваших заказов*\n\n"
             "📦 У вас пока нет заказов.\n\n"
-            "🛍️ Перейдите в каталог, чтобы сделать первый заказ!",
-            parse_mode='Markdown'
+            "🛍️ Перейдите в каталог, чтобы сделать первый заказ!"
         )
+        if edit and query is not None:
+            await safe_edit(query, text)
+        else:
+            await safe_send(update.message.reply_text, text, parse_mode='Markdown')
         return
 
-    status_emoji = {
-        'Новый': '🆕',
-        'Ожидает оплаты (наличные)': '💵',
-        'Ожидает оплаты (карта)': '💳',
-        'Сборка товара': '📦',
-        'В пути': '🚚',
-        'Выдано': '✅',
-        'Подтвержден получение': '✅'
-    }
+    text = "📋 *Ваши заказы:*\n\nВыберите заказ, чтобы посмотреть детали:"
 
-    text = "📋 *Ваши заказы:*\n\n"
+    keyboard = []
+    for order in reversed(orders[-10:]):
+        emoji = STATUS_EMOJI.get(order['status'], '📦')
+        row = order['row']
+        date = order['date']
+        btn_text = f"{emoji} Заказ #{row} от {date}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f'order_view_{row}')])
 
-    for order in orders[-5:]:
-        emoji = status_emoji.get(order['status'], '📦')
-        text += (
-            f"{emoji} *Заказ #{order['row']} от {order['date']}*\n"
-            f"💰 Сумма: *{order['total']}* руб.\n"
-            f"📊 Статус: *{order['status']}*\n"
-            f"📍 Место: {order['address'][:30]}...\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
+    keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')])
+
+    if edit and query is not None:
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await safe_send(
+            update.message.reply_text,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
         )
 
-    keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')]]
 
-    await safe_send(update.message.reply_text, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+async def show_order_details(update, context, query, order_row):
+    """Детали одного заказа."""
+    user_id = update.effective_user.id
+
+    orders = get_user_orders(user_id)
+    order = next((o for o in orders if str(o['row']) == str(order_row)), None)
+
+    if not order:
+        await safe_edit(query, "❌ Заказ не найден.")
+        return
+
+    emoji = STATUS_EMOJI.get(order['status'], '📦')
+
+    text = (
+        f"📋 *Заказ #{order['row']}*\n"
+        f"📅 Дата: *{order['date']}*\n"
+        f"{emoji} Статус: *{order['status']}*\n"
+        f"💰 Сумма: *{order['total']}* руб.\n"
+        f"📍 Место: {order['address']}\n\n"
+        f"🛒 *Состав заказа:*\n{order['items']}"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("🔙 Назад к заказам", callback_data='refresh_orders')],
+    ]
+
+    await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ============================================
@@ -1520,35 +1571,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_method = data[8:]
         await process_payment_selection(update, context, query, payment_method)
 
+    # МОИ ЗАКАЗЫ (новое)
     elif data == 'refresh_orders':
-        orders = get_user_orders(user_id)
-        if not orders:
-            await delete_and_send(query, "📦 У вас пока нет заказов.")
-            return
+        await show_orders_list(update, context, edit=True, query=query)
 
-        status_emoji = {
-            'Новый': '🆕',
-            'Ожидает оплаты (наличные)': '💵',
-            'Ожидает оплаты (карта)': '💳',
-            'Сборка товара': '📦',
-            'В пути': '🚚',
-            'Выдано': '✅',
-            'Подтвержден получение': '✅'
-        }
-
-        text = "📋 *Ваши заказы:*\n\n"
-        for order in orders[-5:]:
-            emoji = status_emoji.get(order['status'], '📦')
-            text += (
-                f"{emoji} *Заказ #{order['row']} от {order['date']}*\n"
-                f"💰 Сумма: *{order['total']}* руб.\n"
-                f"📊 Статус: *{order['status']}*\n"
-                f"📍 Место: {order['address'][:30]}...\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-            )
-
-        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')]]
-        await delete_and_send(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data.startswith('order_view_'):
+        order_row = data[len('order_view_'):]
+        await show_order_details(update, context, query, order_row)
 
     elif data == 'admin_panel':
         await show_admin_panel(update, context, query)
