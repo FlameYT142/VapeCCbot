@@ -24,6 +24,12 @@ ADMIN_ACCESS = {
         'code': 'zxcmayoho222',
         'username': '@myhzxc'
     },
+    # 🥈 Заместитель владельца
+    1427959789: {
+        'role': 'deputy',
+        'code': 'Zmadmin56',
+        'username': '@Mementaaa'
+    },
 }
 
 ADMIN_IDS = list(ADMIN_ACCESS.keys())
@@ -62,6 +68,13 @@ def is_admin(user_id):
 def is_owner(user_id):
     info = get_admin_info(user_id)
     return info.get('role') == 'owner' if info else False
+
+def is_deputy(user_id):
+    info = get_admin_info(user_id)
+    return info.get('role') == 'deputy' if info else False
+
+def is_owner_or_deputy(user_id):
+    return is_owner(user_id) or is_deputy(user_id)
 
 def check_access_code(user_id, code):
     valid_code = get_admin_code(user_id)
