@@ -1,4 +1,4 @@
-python-telegram-bot==20.7
+python-telegram-bot[rate-limiter]==20.7
 gspread==6.0.0
 google-auth==2.25.0
 python-dotenv==1.0.0
