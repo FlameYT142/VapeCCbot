@@ -9,7 +9,8 @@ from telegram.error import RetryAfter, TimedOut, NetworkError
 
 from config import (
     BOT_TOKEN, ADMIN_ACCESS, ADMIN_IDS, OWNER_ID, TECH_ADMIN_ID, ADMIN_GROUP_ID,
-    is_admin, is_owner, get_admin_role, get_admin_code, get_admin_username, check_access_code,
+    is_admin, is_owner, is_deputy, is_owner_or_deputy,
+    get_admin_role, get_admin_code, get_admin_username, check_access_code,
     get_admin_info
 )
 from google_sheets import (
@@ -24,6 +25,7 @@ from cart import (
     get_cart_total, get_cart_text, save_order_data, get_order_data, clear_order_data,
     has_user_consented, save_user_consent, change_cart_quantity
 )
+from rate_limit import limiter
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,10 +35,72 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================
+# 🎭 РОЛИ
+# ============================================
+ROLE_NAMES = {
+    'owner': '👑 Владелец',
+    'deputy': '🥈 Заместитель владельца',
+    'admin': '🛠️ Технический администратор',
+}
+
+
+def role_display(user_id):
+    role = get_admin_role(user_id)
+    return ROLE_NAMES.get(role, 'Сотрудник')
+
+
+# ============================================
+# 🛡 АНТИФЛУД
+# ============================================
+async def check_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user:
+        return True
+
+    allowed, reason = limiter.check(user.id)
+    if allowed:
+        return True
+
+    if reason == 'banned':
+        left = limiter.ban_left(user.id)
+        if update.callback_query:
+            await update.callback_query.answer(
+                f"🚫 Заблокированы за спам. Осталось {left} сек.",
+                show_alert=True
+            )
+        elif update.message:
+            await safe_send(
+                update.message.reply_text,
+                f"🚫 Вы временно заблокированы за слишком частые действия.\n"
+                f"⏳ Осталось: *{left} сек*",
+                parse_mode='Markdown'
+            )
+        return False
+
+    if reason == 'too_fast':
+        if update.callback_query:
+            await update.callback_query.answer("⏳ Не так быстро!", show_alert=False)
+        return False
+
+    if reason == 'burst':
+        if update.callback_query:
+            await update.callback_query.answer(
+                "⚠️ Слишком много действий подряд. Подождите.",
+                show_alert=True
+            )
+        return False
+
+    if reason == 'global':
+        logger.warning("🌐 Глобальный лимит — апдейт пропущен")
+        return False
+
+    return True
+
+
+# ============================================
 # 🛡 БЕЗОПАСНАЯ ОТПРАВКА В TELEGRAM
 # ============================================
 async def safe_send(coro_func, *args, max_retries=5, **kwargs):
-    """Обёртка для любых вызовов Telegram API с retry на flood."""
     for attempt in range(max_retries):
         try:
             return await coro_func(*args, **kwargs)
@@ -53,7 +117,6 @@ async def safe_send(coro_func, *args, max_retries=5, **kwargs):
 
 
 async def error_handler(update, context):
-    """Глобальный обработчик ошибок — чтобы бот не падал."""
     err = context.error
     if isinstance(err, RetryAfter):
         logger.warning(f"RetryAfter в хендлере: ждём {err.retry_after} сек")
@@ -166,7 +229,6 @@ async def safe_edit(query, text, reply_markup=None, parse_mode='Markdown'):
 
 
 async def delete_and_send(query, text, photo=None, reply_markup=None, parse_mode='Markdown'):
-    """Удаляет старое сообщение и отправляет новое."""
     try:
         await query.message.delete()
     except RetryAfter as e:
@@ -283,12 +345,10 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
     if not args:
-        admin_info = get_admin_info(user_id)
-        role_name = "Владелец" if admin_info['role'] == 'owner' else "Технический администратор"
         await safe_send(
             update.message.reply_text,
             f"🔑 *Вход в админ-панель*\n\n"
-            f"👤 Ваша роль: *{role_name}*\n"
+            f"👤 Ваша роль: *{role_display(user_id)}*\n"
             f"🆔 Ваш ID: `{user_id}`\n\n"
             f"Использование: `/admin [код_доступа]`",
             parse_mode='Markdown'
@@ -299,20 +359,18 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if check_access_code(user_id, entered_code):
         admin_sessions[user_id] = True
-        role = get_admin_role(user_id)
-        role_name = "Владелец" if role == 'owner' else "Технический администратор"
         admin_username = get_admin_username(user_id)
 
         await safe_send(
             update.message.reply_text,
             f"✅ *Доступ подтвержден!*\n\n"
-            f"👤 Вы вошли как: *{role_name}*\n"
+            f"👤 Вы вошли как: *{role_display(user_id)}*\n"
             f"🆔 Ваш ID: `{user_id}`\n"
             f"📱 Username: {admin_username}\n\n"
             f"Теперь админ-панель доступна в меню.",
             parse_mode='Markdown'
         )
-        logger.info(f"🔐 Администратор {admin_username} ({user_id}) вошел в систему")
+        logger.info(f"🔐 {role_display(user_id)} {admin_username} ({user_id}) вошел в систему")
 
         if user_id in pending_orders and pending_orders[user_id]:
             order_rows = pending_orders[user_id].copy()
@@ -504,9 +562,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "4. Укажите улицу и способ оплаты"
     )
     if is_admin(user_id):
-        role = get_admin_role(user_id)
-        role_name = "Владелец" if role == 'owner' else "Технический администратор"
-        help_text += f"\n\n👑 *Ваша роль:* {role_name}"
+        help_text += f"\n\n👑 *Ваша роль:* {role_display(user_id)}"
         help_text += f"\n🔑 *Пароль:* `{get_admin_code(user_id)}`"
         help_text += f"\n📝 *Вход:* `/admin [пароль]`"
     await safe_send(update.message.reply_text, help_text, parse_mode='Markdown')
@@ -529,7 +585,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================
-# МОИ ЗАКАЗЫ (список + карточки)
+# МОИ ЗАКАЗЫ
 # ============================================
 STATUS_EMOJI = {
     'Новый': '🆕',
@@ -556,12 +612,7 @@ async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_orders_list(update, context, edit=False, query=None):
-    """Список заказов в виде кнопок."""
-    if query is not None:
-        user_id = update.effective_user.id
-    else:
-        user_id = update.effective_user.id
-
+    user_id = update.effective_user.id
     orders = get_user_orders(user_id)
 
     if not orders:
@@ -600,7 +651,6 @@ async def show_orders_list(update, context, edit=False, query=None):
 
 
 async def show_order_details(update, context, query, order_row):
-    """Детали одного заказа."""
     user_id = update.effective_user.id
 
     orders = get_user_orders(user_id)
@@ -635,6 +685,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ['group', 'supergroup']:
         return
 
+    # 🛡 Антифлуд
+    if not await check_rate_limit(update, context):
+        return
+
     user_id = update.effective_user.id
     text = update.message.text
 
@@ -642,7 +696,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
-    # ДОБАВЛЕНИЕ ТОВАРА
     if context.user_data.get('adding_product'):
         step = context.user_data.get('adding_step')
 
@@ -695,7 +748,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_send(update.message.reply_text, "❌ Неверный формат количества. Введите целое число.", parse_mode='Markdown')
             return
 
-    # КНОПКИ МЕНЮ
     if text == "🛍️ Каталог":
         await catalog_command(update, context)
         return
@@ -719,7 +771,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_send(
                 update.message.reply_photo,
                 photo=PHOTOS['admin'],
-                caption="⚙️ *Админ-панель*\n\nВыберите действие:",
+                caption=f"⚙️ *Админ-панель*\n\n👤 {role_display(user_id)}\n\nВыберите действие:",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
@@ -731,7 +783,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # АДРЕС
     if context.user_data.get('awaiting_address'):
         cart_items = get_cart(user_id)
         if not cart_items:
@@ -773,7 +824,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ОТЗЫВ
     if context.user_data.get('awaiting_review'):
         review_data = context.user_data.get('review_data', {})
         if review_data:
@@ -1176,22 +1226,25 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, q
         await delete_and_send(query, "🔑 *Доступ запрещен*")
         return
 
-    role = get_admin_role(user_id)
-    role_name = "Владелец" if role == 'owner' else "Технический администратор"
-
     keyboard = [
         [InlineKeyboardButton("📦 Управление товарами", callback_data='admin_products')],
         [InlineKeyboardButton("📊 Управление заказами", callback_data='admin_manage_orders')],
         [InlineKeyboardButton("📈 Статистика", callback_data='admin_stats')],
     ]
 
-    if is_owner(user_id):
+    if is_owner_or_deputy(user_id):
         keyboard.append([InlineKeyboardButton("👥 Управление админами", callback_data='admin_users')])
         keyboard.append([InlineKeyboardButton("⚙️ Настройки бота", callback_data='admin_settings')])
 
     keyboard.append([InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')])
 
-    text = f"⚙️ *Админ-панель*\n\n👤 *{role_name}*\n🆔 `{user_id}`\n🔐 Сессия активна\n\nВыберите действие:"
+    text = (
+        f"⚙️ *Админ-панель*\n\n"
+        f"👤 *{role_display(user_id)}*\n"
+        f"🆔 `{user_id}`\n"
+        f"🔐 Сессия активна\n\n"
+        f"Выберите действие:"
+    )
 
     await delete_and_send(query, text, photo=PHOTOS['admin'], reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1351,6 +1404,11 @@ async def set_order_status(update: Update, context: ContextTypes.DEFAULT_TYPE, q
 # ============================================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+
+    # 🛡 Антифлуд (для кнопок)
+    if not await check_rate_limit(update, context):
+        return
+
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
@@ -1571,7 +1629,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payment_method = data[8:]
         await process_payment_selection(update, context, query, payment_method)
 
-    # МОИ ЗАКАЗЫ (новое)
     elif data == 'refresh_orders':
         await show_orders_list(update, context, edit=True, query=query)
 
@@ -1602,7 +1659,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'admin_logout':
         if user_id in admin_sessions:
             del admin_sessions[user_id]
-            await delete_and_send(query, "👋 *Выход выполнен*")
+        await delete_and_send(query, "👋 *Выход выполнен*")
 
     elif data == 'admin_orders_new':
         await show_orders_by_status(update, context, query, 'Новый')
@@ -1681,7 +1738,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ЗАПУСК БОТА
 # ============================================
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    # 🛡 Защита исходящих запросов
+    try:
+        from telegram.ext import AIORateLimiter
+        rate_limiter = AIORateLimiter(
+            overall_max_rate=25,
+            overall_time_period=1,
+            group_max_rate=15,
+            group_time_period=60,
+            max_retries=3,
+        )
+        app = Application.builder() \
+            .token(BOT_TOKEN) \
+            .rate_limiter(rate_limiter) \
+            .build()
+        logger.info("🛡 AIORateLimiter подключён")
+    except ImportError:
+        logger.warning("⚠️ AIORateLimiter недоступен — установи python-telegram-bot[rate-limiter]")
+        app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('help', help_command))
@@ -1698,9 +1772,11 @@ def main():
 
     logger.info("🚀 Бот VapeCity запущен!")
     logger.info(f"👑 Владелец: @voloki4 (ID: {OWNER_ID})")
+    logger.info(f"🥈 Заместитель: @Mementaaa (ID: 1427959789)")
     logger.info(f"🛠️ Технический администратор: @myhzxc (ID: {TECH_ADMIN_ID})")
     logger.info(f"👥 Всего администраторов: {len(ADMIN_ACCESS)}")
     logger.info(f"📢 Группа админов: {ADMIN_GROUP_ID}")
+    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан")
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
