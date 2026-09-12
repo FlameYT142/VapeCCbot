@@ -5,7 +5,7 @@ from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram.error import RetryAfter, TimedOut, NetworkError
+from telegram.error import RetryAfter, TimedOut, NetworkError, BadRequest
 
 from config import (
     BOT_TOKEN, ADMIN_ACCESS, ADMIN_IDS, OWNER_ID, TECH_ADMIN_ID, ADMIN_GROUP_ID,
@@ -32,6 +32,33 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# 📏 ЛИМИТЫ TELEGRAM
+# ============================================
+TELEGRAM_CAPTION_LIMIT = 1024
+TELEGRAM_TEXT_LIMIT = 4096
+
+
+def trim_caption(text: str, limit: int = TELEGRAM_CAPTION_LIMIT) -> str:
+    """Обрезает подпись к фото до лимита Telegram."""
+    if not text:
+        return text
+    if len(text) <= limit:
+        return text
+    logger.warning(f"✂️ Caption обрезан: {len(text)} → {limit}")
+    return text[:limit - 3] + "..."
+
+
+def trim_text(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> str:
+    """Обрезает текстовое сообщение до лимита Telegram."""
+    if not text:
+        return text
+    if len(text) <= limit:
+        return text
+    logger.warning(f"✂️ Text обрезан: {len(text)} → {limit}")
+    return text[:limit - 3] + "..."
 
 
 # ============================================
@@ -101,6 +128,13 @@ async def check_rate_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # 🛡 БЕЗОПАСНАЯ ОТПРАВКА В TELEGRAM
 # ============================================
 async def safe_send(coro_func, *args, max_retries=5, **kwargs):
+    """Обёртка для вызовов Telegram API: retry + обрезка длинных текстов."""
+    # ✂️ Автоматически обрезаем длинные тексты
+    if 'caption' in kwargs and isinstance(kwargs['caption'], str):
+        kwargs['caption'] = trim_caption(kwargs['caption'])
+    if 'text' in kwargs and isinstance(kwargs['text'], str):
+        kwargs['text'] = trim_text(kwargs['text'])
+
     for attempt in range(max_retries):
         try:
             return await coro_func(*args, **kwargs)
@@ -112,6 +146,10 @@ async def safe_send(coro_func, *args, max_retries=5, **kwargs):
             wait = 2 ** attempt
             logger.warning(f"🌐 Telegram сеть: {e}. Ждём {wait} сек")
             await asyncio.sleep(wait)
+        except BadRequest as e:
+            # 400 Bad Request — повторять бессмысленно
+            logger.error(f"❌ BadRequest: {e}")
+            return None
     logger.error("❌ Telegram не ответил после всех попыток")
     return None
 
@@ -124,6 +162,9 @@ async def error_handler(update, context):
         return
     if isinstance(err, (TimedOut, NetworkError)):
         logger.warning(f"Сеть: {err}")
+        return
+    if isinstance(err, BadRequest):
+        logger.error(f"BadRequest в хендлере: {err}")
         return
     logger.exception(f"Необработанная ошибка: {err}")
 
@@ -685,7 +726,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type in ['group', 'supergroup']:
         return
 
-    # 🛡 Антифлуд
     if not await check_rate_limit(update, context):
         return
 
@@ -1405,7 +1445,6 @@ async def set_order_status(update: Update, context: ContextTypes.DEFAULT_TYPE, q
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
-    # 🛡 Антифлуд (для кнопок)
     if not await check_rate_limit(update, context):
         return
 
@@ -1738,7 +1777,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ЗАПУСК БОТА
 # ============================================
 def main():
-    # 🛡 Защита исходящих запросов
     try:
         from telegram.ext import AIORateLimiter
         rate_limiter = AIORateLimiter(
@@ -1776,7 +1814,7 @@ def main():
     logger.info(f"🛠️ Технический администратор: @myhzxc (ID: {TECH_ADMIN_ID})")
     logger.info(f"👥 Всего администраторов: {len(ADMIN_ACCESS)}")
     logger.info(f"📢 Группа админов: {ADMIN_GROUP_ID}")
-    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан")
+    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан + trim_caption")
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
