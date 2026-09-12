@@ -340,6 +340,17 @@ def save_review(user_id, username, order_id, product_rating, service_rating, com
 def get_orders_stats():
     """
     Собирает статистику по всем заказам из листа «Заказы».
+    Возвращает словарь:
+    {
+        'total_orders': int,
+        'total_clients': int,
+        'total_revenue': float,
+        'avg_check': float,
+        'orders_today': int,
+        'orders_week': int,
+        'by_status': {status: count},
+        'top_products': [(name, count), ...]
+    }
     """
     sheet = get_orders_sheet()
     data = sheet.get_all_values()
