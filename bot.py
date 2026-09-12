@@ -530,17 +530,39 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.info(f"🔐 {role_display(user_id)} {admin_username} ({user_id}) вошел в систему")
 
+        # ============================================
+        # 📦 ОБРАБОТКА ОТЛОЖЕННЫХ ЗАКАЗОВ
+        # ============================================
         if user_id in pending_orders and pending_orders[user_id]:
-            order_rows = pending_orders[user_id].copy()
+            pending = pending_orders[user_id].copy()
             pending_orders[user_id] = []
 
             await replace_message(
                 update, context,
-                text=f"📦 *Обнаружены отложенные заказы:* {len(order_rows)} шт.\n\nОбрабатываю...",
+                text=(
+                    f"📦 *Обнаружено отложенных заказов:* {len(pending)} шт.\n\n"
+                    f"Обрабатываю и подтверждаю оплату..."
+                ),
             )
 
-            for order_row in order_rows:
+            for item in pending:
+                order_row = None
+                group_chat_id = None
+                group_msg_id = None
+
                 try:
+                    # Поддержка обоих форматов: int и dict
+                    if isinstance(item, dict):
+                        order_row = item.get('order_row')
+                        group_chat_id = item.get('chat_id')
+                        group_msg_id = item.get('message_id')
+                    else:
+                        order_row = int(item)
+
+                    if order_row is None:
+                        continue
+
+                    # 1. Списываем товары со склада
                     sheet = get_orders_sheet()
                     order_data = sheet.row_values(int(order_row) + 1)
 
@@ -565,18 +587,68 @@ async def admin_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             except Exception as e:
                                 logger.warning(f"⚠️ Не удалось распарсить: {line} | {e}")
 
+                    # 2. Отмечаем в ЛС админа
                     await replace_message(
                         update, context,
-                        text=f"✅ *Заказ #{order_row}: оплата подтверждена!*\n\n📦 Товары списаны со склада.",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("📊 Изменить статус", callback_data=f'change_status_{order_row}')
-                        ]]),
+                        text=(
+                            f"✅ *Заказ #{order_row} подтверждён!*\n\n"
+                            f"📦 Товары списаны со склада.\n"
+                            f"💬 Отметка о подтверждении проставлена в админ-чате."
+                        ),
                     )
+
+                    # 3. Обновляем кнопки у исходного сообщения в группе
+                    if group_chat_id and group_msg_id:
+                        try:
+                            await context.bot.edit_message_reply_markup(
+                                chat_id=group_chat_id,
+                                message_id=group_msg_id,
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton(
+                                        "📊 Изменить статус",
+                                        callback_data=f'change_status_{order_row}'
+                                    )
+                                ]])
+                            )
+                            logger.info(f"✅ Кнопки заказа #{order_row} обновлены в админ-чате")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Не удалось обновить кнопки в группе: {e}")
+
+                    # 4. Отправляем сообщение-отметку в админ-чат
+                    if group_chat_id:
+                        admin_username = update.effective_user.username
+                        admin_name = update.effective_user.first_name or "Сотрудник"
+                        admin_display = f"@{admin_username}" if admin_username else admin_name
+
+                        try:
+                            await safe_send(
+                                context.bot.send_message,
+                                group_chat_id,
+                                f"✅ *Заказ #{order_row} — оплата подтверждена*\n"
+                                f"👤 Сотрудник: {admin_display}\n"
+                                f"🕐 {datetime.now(BRATSK_TZ).strftime('%d.%m.%Y %H:%M')}\n"
+                                f"━━━━━━━━━━━━━━━━━━━\n"
+                                f"📦 Товары списаны со склада.",
+                                parse_mode='Markdown',
+                                reply_markup=InlineKeyboardMarkup([[
+                                    InlineKeyboardButton(
+                                        "📊 Изменить статус",
+                                        callback_data=f'change_status_{order_row}'
+                                    )
+                                ]]),
+                            )
+                            logger.info(f"📢 Отметка о заказе #{order_row} отправлена в админ-чат")
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка отправки отметки в группу: {e}")
+
                     logger.info(f"✅ Отложенный заказ #{order_row} обработан")
 
                 except Exception as e:
                     logger.error(f"❌ Ошибка обработки отложенного заказа: {e}")
-                    await replace_message(update, context, text=f"❌ Ошибка с заказом #{order_row}: {e}")
+                    await replace_message(
+                        update, context,
+                        text=f"❌ Ошибка с заказом #{order_row}: {e}"
+                    )
     else:
         await replace_message(update, context, text="❌ *Неверный код доступа!*")
 
@@ -1184,32 +1256,53 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
     else:
         admin_display = admin_name
 
+    # ❌ Админ не авторизован — просим зайти в ЛС и ввести пароль
     if admin_id not in admin_sessions or not admin_sessions[admin_id]:
         try:
+            if admin_id not in pending_orders:
+                pending_orders[admin_id] = []
+
+            pending_orders[admin_id].append({
+                'order_row': int(order_row),
+                'chat_id': query.message.chat.id,
+                'message_id': query.message.message_id,
+            })
+
+            login_text = (
+                f"🔐 *Требуется вход в админ-панель*\n"
+                f"━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📦 Заказ *#{order_row}* ждёт подтверждения оплаты.\n\n"
+                f"Чтобы подтвердить заказ, войдите в админ-панель:\n\n"
+                f"👉 Отправьте команду:\n"
+                f"`/admin ваш_пароль`\n\n"
+                f"Например: `/admin admin672345`\n\n"
+                f"🕐 После ввода пароля заказ будет обработан автоматически."
+            )
+
             await safe_send(
                 context.bot.send_message,
                 admin_id,
-                f"🔑 *Требуется авторизация*\n\n"
-                f"Для работы с заказом *#{order_row}* введите пароль:\n\n"
-                f"`/admin ваш_пароль`\n\n"
-                f"После ввода пароля я автоматически обработаю заказ.",
-                parse_mode='Markdown'
+                login_text,
+                parse_mode='Markdown',
             )
 
-            if admin_id not in pending_orders:
-                pending_orders[admin_id] = []
-            pending_orders[admin_id].append(int(order_row))
-
-            await query.answer("📩 Проверьте ЛС", show_alert=True)
+            await query.answer(
+                "📩 Проверьте ЛС — нужно войти в админ-панель",
+                show_alert=True,
+            )
         except Exception as e:
             logger.error(f"Не удалось отправить ЛС админу {admin_id}: {e}")
-            await query.answer("❌ Напишите боту в ЛС", show_alert=True)
+            await query.answer(
+                "❌ Напишите боту в ЛС и введите /admin [пароль]",
+                show_alert=True,
+            )
         return
 
     if not is_admin(admin_id):
         await query.answer("⛔ У вас нет прав", show_alert=True)
         return
 
+    # ✅ Админ авторизован — обрабатываем сразу
     try:
         sheet = get_orders_sheet()
         order_data = sheet.row_values(int(order_row) + 1)
@@ -2062,7 +2155,7 @@ def main():
     logger.info(f"🛠️ Технический администратор: @myhzxc (ID: {TECH_ADMIN_ID})")
     logger.info(f"👥 Всего администраторов: {len(ADMIN_ACCESS)}")
     logger.info(f"📢 Группа админов: {ADMIN_GROUP_ID}")
-    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан + trim_caption + replace + delete + 🏠 menu")
+    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан + trim_caption + replace + delete + pending_orders с отметкой в группе")
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
