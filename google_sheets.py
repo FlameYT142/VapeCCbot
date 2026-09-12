@@ -334,3 +334,86 @@ def save_review(user_id, username, order_id, product_rating, service_rating, com
     sheet.append_row(row)
     logger.info(f"Отзыв сохранен от {username} (заказ #{order_id})")
     return True
+
+
+@retry_on_429
+def get_orders_stats():
+    """
+    Собирает статистику по всем заказам из листа «Заказы».
+    """
+    sheet = get_orders_sheet()
+    data = sheet.get_all_values()
+
+    stats = {
+        'total_orders': 0,
+        'total_clients': 0,
+        'total_revenue': 0.0,
+        'avg_check': 0.0,
+        'orders_today': 0,
+        'orders_week': 0,
+        'by_status': {},
+        'top_products': [],
+    }
+
+    if len(data) < 2:
+        return stats
+
+    now = datetime.now(BRATSK_TZ)
+    today = now.strftime('%d.%m.%Y')
+    week_ago = now.timestamp() - 7 * 24 * 3600
+
+    clients = set()
+    product_counter = {}
+
+    for row in data[1:]:
+        if len(row) < 7:
+            continue
+
+        user_id = row[0].strip()
+        items_str = row[2].strip() if len(row) > 2 else ''
+        total_str = row[3].strip() if len(row) > 3 else '0'
+        status = row[5].strip() if len(row) > 5 else 'Новый'
+        date_str = row[6].strip() if len(row) > 6 else ''
+
+        if user_id:
+            clients.add(user_id)
+
+        try:
+            total = float(total_str.replace(',', '.').replace(' ', ''))
+        except Exception:
+            total = 0.0
+
+        stats['total_orders'] += 1
+        stats['total_revenue'] += total
+
+        stats['by_status'][status] = stats['by_status'].get(status, 0) + 1
+
+        if date_str.startswith(today):
+            stats['orders_today'] += 1
+
+        try:
+            order_dt = datetime.strptime(date_str, '%d.%m.%Y %H:%M')
+            order_dt = order_dt.replace(tzinfo=BRATSK_TZ)
+            if order_dt.timestamp() >= week_ago:
+                stats['orders_week'] += 1
+        except Exception:
+            pass
+
+        for line in items_str.split('\n'):
+            try:
+                if ' x' in line:
+                    name = line.rsplit(' x', 1)[0].strip()
+                    if name:
+                        product_counter[name] = product_counter.get(name, 0) + 1
+            except Exception:
+                pass
+
+    stats['total_clients'] = len(clients)
+    if stats['total_orders'] > 0:
+        stats['avg_check'] = stats['total_revenue'] / stats['total_orders']
+
+    stats['top_products'] = sorted(
+        product_counter.items(), key=lambda x: x[1], reverse=True
+    )[:5]
+
+    return stats
