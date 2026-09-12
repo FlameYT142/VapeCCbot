@@ -78,7 +78,7 @@ def role_display(user_id):
 # ============================================
 # 🗑 ХРАНИЛИЩЕ ПОСЛЕДНИХ СООБЩЕНИЙ
 # ============================================
-_last_bot_message = {}   # chat_id -> message_id
+_last_bot_message = {}
 _bot_ref = None
 
 
@@ -121,9 +121,6 @@ async def safe_send(coro_func, *args, max_retries=5, **kwargs):
     return None
 
 
-# ============================================
-# 🗑 УДАЛИТЬ СТАРОЕ + ОТПРАВИТЬ НОВОЕ (из message/command)
-# ============================================
 async def replace_message(update, context, text=None, photo=None, reply_markup=None, parse_mode='Markdown'):
     chat_id = update.effective_chat.id
     await _delete_last_bot_message(chat_id)
@@ -154,9 +151,6 @@ async def replace_message(update, context, text=None, photo=None, reply_markup=N
         return None
 
 
-# ============================================
-# 🗑 УДАЛИТЬ СООБЩЕНИЕ-КНОПКУ + ОТПРАВИТЬ НОВОЕ (из callback)
-# ============================================
 async def delete_query_message_and_send(
     query, context, text=None, photo=None,
     reply_markup=None, parse_mode='Markdown', chat_id=None
@@ -164,7 +158,6 @@ async def delete_query_message_and_send(
     if chat_id is None:
         chat_id = query.message.chat.id
 
-    # Удаляем сообщение, на котором нажали кнопку
     try:
         await safe_send(query.message.delete)
     except Exception as e:
@@ -172,7 +165,6 @@ async def delete_query_message_and_send(
 
     _last_bot_message.pop(chat_id, None)
 
-    # Отправляем новое
     try:
         if photo:
             msg = await safe_send(
@@ -351,7 +343,7 @@ pending_orders = {}
 
 
 # ============================================
-# ОБНОВЛЕНИЕ КОРЗИНЫ (удаляет кнопку + новое)
+# ОБНОВЛЕНИЕ КОРЗИНЫ
 # ============================================
 async def update_cart_message(query, context, user_id):
     cart_text = get_cart_text(user_id)
@@ -362,6 +354,9 @@ async def update_cart_message(query, context, user_id):
             query, context,
             text="🛒 Ваша корзина пуста.\n\n🛍️ Добавьте товары из каталога!",
             photo=PHOTOS['cart'],
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+            ]])
         )
         return
 
@@ -375,7 +370,7 @@ async def update_cart_message(query, context, user_id):
 
     keyboard.append([InlineKeyboardButton("🔄 Очистить корзину", callback_data='clear_cart')])
     keyboard.append([InlineKeyboardButton("✅ Оформить заказ", callback_data='checkout')])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')])
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
 
     await delete_query_message_and_send(
         query, context,
@@ -625,6 +620,8 @@ async def catalog_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = " (Скоро)" if not cat['active'] else ""
         keyboard.append([InlineKeyboardButton(f"{emoji} {cat['name']}{status}", callback_data=f'cat_{cat["name"]}')])
 
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
+
     await replace_message(
         update, context,
         text=text,
@@ -654,6 +651,9 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context,
             text=cart_text + "\n\n🛍️ Добавьте товары из каталога!",
             photo=PHOTOS['cart'],
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+            ]])
         )
         return
 
@@ -667,7 +667,7 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard.append([InlineKeyboardButton("🔄 Очистить корзину", callback_data='clear_cart')])
     keyboard.append([InlineKeyboardButton("✅ Оформить заказ", callback_data='checkout')])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='back_to_menu')])
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
 
     await replace_message(
         update, context,
@@ -716,7 +716,13 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  • 📱 Техника (скоро)\n\n"
         "⏰ *Режим работы:* Круглосуточно!"
     )
-    await replace_message(update, context, text=text)
+    await replace_message(
+        update, context,
+        text=text,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+        ]])
+    )
 
 
 # ============================================
@@ -753,6 +759,9 @@ async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📦 У вас пока нет заказов.\n\n"
                 "🛍️ Перейдите в каталог, чтобы сделать первый заказ!"
             ),
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+            ]])
         )
         return
 
@@ -767,6 +776,7 @@ async def my_orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f'order_view_{row}')])
 
     keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')])
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
 
     await replace_message(update, context, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -861,6 +871,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📦 Управление товарами", callback_data='admin_products')],
                 [InlineKeyboardButton("📊 Управление заказами", callback_data='admin_manage_orders')],
                 [InlineKeyboardButton("📈 Статистика", callback_data='admin_stats')],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
                 [InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')],
             ]
             await replace_message(
@@ -899,6 +910,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("💵 Наличные (при получении)", callback_data='payment_cash')],
             [InlineKeyboardButton("💳 Перевод по карте", callback_data='payment_card')],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
         ]
 
         await replace_message(
@@ -935,6 +947,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await replace_message(
                 update, context,
                 text="⭐ *Спасибо за ваш отзыв!*\n\nВаше мнение очень важно для нас.\nВозвращайтесь в VapeCity - 24/7! 🚀",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+                ]])
             )
         return
 
@@ -983,7 +998,14 @@ async def process_checkout(update, context, query):
     )
 
     context.user_data['awaiting_address'] = True
-    await delete_query_message_and_send(query, context, text=text, photo=PHOTOS['payment'])
+    await delete_query_message_and_send(
+        query, context,
+        text=text,
+        photo=PHOTOS['payment'],
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+        ]])
+    )
 
 
 async def process_payment_selection(update, context, query, payment_method):
@@ -1040,7 +1062,14 @@ async def process_cash_order(update, context, query, user_id):
         f"Спасибо за покупку! 🎉"
     )
 
-    await delete_query_message_and_send(query, context, text=text, photo=PHOTOS['payment'])
+    await delete_query_message_and_send(
+        query, context,
+        text=text,
+        photo=PHOTOS['payment'],
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+        ]])
+    )
     await notify_admins(context, order, 'наличные', order_row)
 
 
@@ -1089,7 +1118,14 @@ async def process_card_order(update, context, query, user_id):
         f"Спасибо за покупку! 🎉"
     )
 
-    await delete_query_message_and_send(query, context, text=caption, photo=PHOTOS['payment'])
+    await delete_query_message_and_send(
+        query, context,
+        text=caption,
+        photo=PHOTOS['payment'],
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+        ]])
+    )
     await notify_admins(context, order, 'карта', order_row, order_id)
 
 
@@ -1136,7 +1172,7 @@ async def notify_admins(context, order, payment_type, order_row, order_id=None):
 
 
 # ============================================
-# ПОДТВЕРЖДЕНИЕ ОПЛАТЫ (в группе — редактируем, не удаляем)
+# ПОДТВЕРЖДЕНИЕ ОПЛАТЫ
 # ============================================
 async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
     admin_id = update.effective_user.id
@@ -1204,7 +1240,6 @@ async def deliver_order(update: Update, context: ContextTypes.DEFAULT_TYPE, quer
     except Exception as e:
         logger.error(f"❌ Ошибка списания товаров: {e}")
 
-    # В группе — РЕДАКТИРУЕМ сообщение (не удаляем, чтобы не мешать другим админам)
     try:
         current_text = query.message.caption or query.message.text or ""
 
@@ -1318,7 +1353,13 @@ async def skip_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query,
     )
     context.user_data['awaiting_review'] = False
     context.user_data['review_data'] = {}
-    await delete_query_message_and_send(query, context, text="⭐ *Спасибо!*\n\nВаше мнение очень важно для нас.\nВозвращайтесь в VapeCity - 24/7! 🚀")
+    await delete_query_message_and_send(
+        query, context,
+        text="⭐ *Спасибо!*\n\nВаше мнение очень важно для нас.\nВозвращайтесь в VapeCity - 24/7! 🚀",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+        ]])
+    )
 
 
 async def comment_review(update: Update, context: ContextTypes.DEFAULT_TYPE, query, user_id, order_row):
@@ -1345,6 +1386,7 @@ async def show_admin_panel(update, context, query):
         keyboard.append([InlineKeyboardButton("👥 Управление админами", callback_data='admin_users')])
         keyboard.append([InlineKeyboardButton("⚙️ Настройки бота", callback_data='admin_settings')])
 
+    keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
     keyboard.append([InlineKeyboardButton("🚪 Выйти", callback_data='admin_logout')])
 
     text = (
@@ -1368,6 +1410,7 @@ async def admin_products(update, context, query):
         [InlineKeyboardButton("➕ Добавить товар", callback_data='admin_add_product')],
         [InlineKeyboardButton("📋 Список товаров", callback_data='admin_list_products')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
     ]
 
     await delete_query_message_and_send(query, context, text="📦 *Управление товарами*\n\nВыберите действие:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1385,6 +1428,7 @@ async def admin_manage_orders(update, context, query):
         [InlineKeyboardButton("🚚 В пути", callback_data='admin_orders_delivery')],
         [InlineKeyboardButton("✅ Выданные", callback_data='admin_orders_delivered')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
     ]
 
     await delete_query_message_and_send(query, context, text="📊 *Управление заказами*\n\nВыберите статус:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1447,6 +1491,7 @@ async def admin_stats(update, context, query):
     keyboard = [
         [InlineKeyboardButton("🔄 Обновить", callback_data='admin_stats')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_panel')],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
     ]
 
     await delete_query_message_and_send(query, context, text=stats_text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1470,7 +1515,10 @@ async def show_orders_by_status(update, context, query, status):
 
         if not orders:
             text = f"📭 Нет заказов со статусом *{status}*"
-            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')]]
+            keyboard = [
+                [InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
+            ]
             await delete_query_message_and_send(query, context, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
@@ -1491,6 +1539,7 @@ async def show_orders_by_status(update, context, query, status):
             )])
 
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')])
+        keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
 
         await delete_query_message_and_send(query, context, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1506,6 +1555,7 @@ async def change_order_status(update, context, query, order_row):
         [InlineKeyboardButton("🚚 В пути", callback_data=f'set_status_{order_row}_В пути')],
         [InlineKeyboardButton("✅ Выдано", callback_data=f'set_status_{order_row}_Выдано')],
         [InlineKeyboardButton("🔙 Назад", callback_data='admin_manage_orders')],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
     ]
 
     await delete_query_message_and_send(query, context, text=f"📊 *Изменение статуса заказа #{order_row}*\n\nВыберите новый статус:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1540,7 +1590,10 @@ async def set_order_status(update, context, query, order_row, new_status):
         await delete_query_message_and_send(
             query, context,
             text=f"✅ Статус заказа #{order_row} изменён на *{new_status}*",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К заказам", callback_data='admin_manage_orders')]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 К заказам", callback_data='admin_manage_orders')],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
+            ])
         )
 
         logger.info(f"📊 Заказ #{order_row}: статус → {new_status}")
@@ -1691,6 +1744,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             emoji = cat['emoji']
             status = " (Скоро)" if not cat['active'] else ""
             keyboard.append([InlineKeyboardButton(f"{emoji} {cat['name']}{status}", callback_data=f'cat_{cat["name"]}')])
+        keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
         await delete_query_message_and_send(query, context, text="📦 *Выберите категорию:*", photo=PHOTOS['catalog'], reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith('cat_'):
@@ -1704,7 +1758,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if not products:
-            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='catalog')]]
+            keyboard = [
+                [InlineKeyboardButton("🔙 Назад", callback_data='catalog')],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
+            ]
             await delete_query_message_and_send(
                 query, context,
                 text=f"📦 *{category}*\n\n🚫 *Все товары в этой категории закончились.*\nЗагляните позже — скоро привезём!",
@@ -1722,6 +1779,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             ])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='catalog')])
+        keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
 
         text = f"📦 *{category}*\n\nВыберите товар:"
 
@@ -1747,6 +1805,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if product['in_stock'] and product['quantity'] > 0:
             keyboard.append([InlineKeyboardButton("➕ Добавить в корзину", callback_data=f'add_{product_id}')])
         keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data=f'cat_{product["category"]}')])
+        keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
         await delete_query_message_and_send(query, context, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith('add_'):
@@ -1773,7 +1832,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         add_to_cart(user_id, product)
         total = get_cart_total(user_id)
-        await delete_query_message_and_send(query, context, text=f"✅ *{product['name']}* добавлен!\n💰 Сумма: *{total:.2f}* руб.\n🔢 Осталось: *{product['quantity'] - current_in_cart - 1}* шт.")
+        await delete_query_message_and_send(
+            query, context,
+            text=f"✅ *{product['name']}* добавлен!\n💰 Сумма: *{total:.2f}* руб.\n🔢 Осталось: *{product['quantity'] - current_in_cart - 1}* шт.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 Корзина", callback_data='view_cart')],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
+            ])
+        )
 
     elif data == 'view_cart':
         await update_cart_message(query, context, user_id)
@@ -1785,7 +1851,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == 'clear_cart':
         clear_cart(user_id)
-        await delete_query_message_and_send(query, context, text="🛒 Корзина очищена.")
+        await delete_query_message_and_send(
+            query, context,
+            text="🛒 Корзина очищена.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+            ]])
+        )
 
     elif data == 'checkout':
         await process_checkout(update, context, query)
@@ -1795,10 +1867,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_payment_selection(update, context, query, payment_method)
 
     elif data == 'refresh_orders':
-        # Показать список заказов заново
         orders = get_user_orders(user_id)
         if not orders:
-            await delete_query_message_and_send(query, context, text="📦 У вас пока нет заказов.")
+            await delete_query_message_and_send(
+                query, context,
+                text="📦 У вас пока нет заказов.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+                ]])
+            )
             return
         text = "📋 *Ваши заказы:*\n\nВыберите заказ, чтобы посмотреть детали:"
         keyboard = []
@@ -1806,6 +1883,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             emoji = STATUS_EMOJI.get(order['status'], '📦')
             keyboard.append([InlineKeyboardButton(f"{emoji} Заказ #{order['row']} от {order['date']}", callback_data=f'order_view_{order["row"]}')])
         keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data='refresh_orders')])
+        keyboard.append([InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')])
         await delete_query_message_and_send(query, context, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith('order_view_'):
@@ -1824,7 +1902,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📍 Место: {order['address']}\n\n"
             f"🛒 *Состав заказа:*\n{order['items']}"
         )
-        keyboard = [[InlineKeyboardButton("🔙 Назад к заказам", callback_data='refresh_orders')]]
+        keyboard = [
+            [InlineKeyboardButton("🔙 Назад к заказам", callback_data='refresh_orders')],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')],
+        ]
         await delete_query_message_and_send(query, context, text=text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == 'admin_panel':
@@ -1845,12 +1926,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data['adding_product'] = True
         context.user_data['adding_step'] = 'name'
-        await delete_query_message_and_send(query, context, text="➕ *Добавление товара*\n\n📦 Шаг 1/3: Введите *название* товара\n\nПример: `Хаски Под`\n\nДля отмены: /cancel")
+        await delete_query_message_and_send(
+            query, context,
+            text="➕ *Добавление товара*\n\n📦 Шаг 1/3: Введите *название* товара\n\nПример: `Хаски Под`\n\nДля отмены: /cancel",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+            ]])
+        )
 
     elif data == 'admin_logout':
         if user_id in admin_sessions:
             del admin_sessions[user_id]
-        await delete_query_message_and_send(query, context, text="👋 *Выход выполнен*")
+        await delete_query_message_and_send(
+            query, context,
+            text="👋 *Выход выполнен*",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_menu')
+            ]])
+        )
 
     elif data == 'admin_orders_new':
         await show_orders_by_status(update, context, query, 'Новый')
@@ -1969,7 +2062,7 @@ def main():
     logger.info(f"🛠️ Технический администратор: @myhzxc (ID: {TECH_ADMIN_ID})")
     logger.info(f"👥 Всего администраторов: {len(ADMIN_ACCESS)}")
     logger.info(f"📢 Группа админов: {ADMIN_GROUP_ID}")
-    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан + trim_caption + replace + delete")
+    logger.info("🛡 Защита: AIORateLimiter + per-user + burst + global + автобан + trim_caption + replace + delete + 🏠 menu")
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
